@@ -47,28 +47,42 @@ class MiniDocStringType:
             ValueError:
                 If the type string is not recognized or the input is unsupported.
         """
+        pytype_raw: Any
+
         if isinstance(type_input, str):
             type_str = type_input.strip()
-            pytype = SUPPORTED_TYPES.get(type_str)
-            if pytype is None:
-                raise ValueError(f"Unsupported type string: {type_str}")
-        elif isinstance(type_input, type) or get_origin(type_input) is not None:
-            pytype = type_input
+            is_optional = False
+
+            # Normalize "X | None" and "None | X" to Optional[X]
+            if match := re.match(r"^(None\s*\|\s*(.*)|(.*)\s*\|\s*None)$", type_str):
+                type_str = match.group(2) or match.group(3)
+                type_str = type_str.strip()
+                is_optional = True
+
+            # Handle Optional[X] notation directly
+            if not is_optional and (match := re.match(r"^Optional\[(.*)\]$", type_str)):
+                type_str = match.group(1).strip()
+                is_optional = True
+
+            base_type = SUPPORTED_TYPES.get(type_str)
+            if base_type is None:
+                raise ValueError(f"Unsupported type string: {type_input!r}")
+
+            pytype_raw = Union[base_type, None] if is_optional else base_type
         else:
-            raise ValueError(f"Unsupported type input: {type_input!r}")
+            pytype_raw = type_input
 
         self._optional = False
 
-        if get_origin(pytype) is Union:
-            args = get_args(pytype)
+        if get_origin(pytype_raw) is Union:
+            args = get_args(pytype_raw)
             if len(args) == 2 and type(None) in args:
                 self._optional = True
-                real_type = args[0] if args[1] is type(None) else args[1]
-                self._type = real_type
+                self._type: Type = args[0] if args[1] is type(None) else args[1]
             else:
-                self._type = pytype
+                self._type = cast(Type, pytype_raw)
         else:
-            self._type = pytype
+            self._type = cast(Type, pytype_raw)
 
     def is_optional(self) -> bool:
         """
@@ -171,10 +185,16 @@ class MiniDocStringType:
 
         return f"ArgType({opt}{self._type}{close})"
 
-    def to_string(self) -> str:
+    def to_string(self, strip_optional: bool = False) -> str:
         """
         Dynamically reconstructs the type string.
-        
+
+        Args:
+            strip_optional (bool):
+                If True, the returned type string will omit the Optional[...] wrapper
+                and show only the inner type. This is useful when the optionality is
+                expressed separately (e.g., in a schema with an 'optional' flag).
+
         Returns:
             str:
                 The human-readable reconstructed type string.
@@ -188,7 +208,7 @@ class MiniDocStringType:
         else:
             type_str = self._type.__name__ if hasattr(self._type, '__name__') else str(self._type)
 
-        if self.is_optional():
+        if self.is_optional() and not strip_optional:
             type_str = f"Optional[{type_str}]"
 
         return type_str
@@ -483,7 +503,7 @@ class MiniDocString:
             lines.append("  parameters:")
             for arg in self.args:
                 lines.append(f"    - name: {arg.name}")
-                lines.append(f"      type: {arg.pytype.to_string()}")
+                lines.append(f"      type: {arg.pytype.to_string(strip_optional=True)}")
                 lines.append(f"      description: {_flatten(arg.desc)}")
                 lines.append(f"      optional: {arg.pytype.is_optional()}")
 

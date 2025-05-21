@@ -213,13 +213,16 @@ class MiniDocStringType:
 
         return type_str
 
-    def cast(self, value: str) -> Any:
+    def cast(self, value: str, allow_scalar_to_list: bool = False) -> Any:
         """
         Attempt to cast a string value to the target type.
 
         Args:
             value (str):
                 The input value as a string.
+            allow_scalar_to_list (bool):
+                If True, a single scalar value will be promoted to a one-element list 
+                if the target type expects a list.
 
         Returns:
             Any:
@@ -238,7 +241,10 @@ class MiniDocStringType:
             try:
                 parsed = ast.literal_eval(value)
                 if not isinstance(parsed, list):
-                    raise ValueError(f"Expected a list, got {type(parsed).__name__}")
+                    if allow_scalar_to_list:
+                        parsed = [parsed]
+                    else:
+                        raise ValueError(f"Expected a list, got {type(parsed).__name__}")
 
                 inner_type = self._get_inner_type()
                 return [inner_type(elem) for elem in parsed]

@@ -1,3 +1,6 @@
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)
+
 # fifo-dev-common
 
 Core Python modules shared across all `fifo-dev` repositories, available under the `fifo_dev_common`
@@ -20,7 +23,7 @@ This repo is meant for local development use. Install via editable mode:
 pip install -e .
 ```
 
-Python 3.8+ is required.
+Python 3.10+ is required.
 
 ## Modules
 

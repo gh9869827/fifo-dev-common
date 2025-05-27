@@ -21,7 +21,7 @@ class MiniDocStringType:
     and Optional types (Optional[int], Optional[list[int]]).
 
     Attributes:
-        _type (Type):
+        _type (Type[Any]):
             The Python type stored without the Optional[...] wrapper.
 
         _optional (bool):
@@ -32,15 +32,15 @@ class MiniDocStringType:
             If the provided type string is not supported.
     """
 
-    _type: Type
+    _type: Type[Any]
     _optional: bool
 
-    def __init__(self, type_input: str | Type):
+    def __init__(self, type_input: str | Type[Any]):
         """
         Initializes the MiniDocStringType from a type string or a Python type.
 
         Args:
-            type_input (str | Type):
+            type_input (str | Type[Any]):
                 Either a type description string or a Python type.
 
         Raises:
@@ -78,11 +78,11 @@ class MiniDocStringType:
             args = get_args(pytype_raw)
             if len(args) == 2 and type(None) in args:
                 self._optional = True
-                self._type: Type = args[0] if args[1] is type(None) else args[1]
+                self._type: Type[Any] = args[0] if args[1] is type(None) else args[1]
             else:
-                self._type = cast(Type, pytype_raw)
+                self._type = cast(Type[Any], pytype_raw)
         else:
-            self._type = cast(Type, pytype_raw)
+            self._type = cast(Type[Any], pytype_raw)
 
     def is_optional(self) -> bool:
         """
@@ -115,12 +115,12 @@ class MiniDocStringType:
         """
         return self._type is list or get_origin(self._type) is list
 
-    def _get_inner_type(self) -> Type:
+    def _get_inner_type(self) -> Type[Any]:
         """
         Get the inner type if this is a list[X].
 
         Returns:
-            Type:
+            Type[Any]:
                 The inner type if applicable, otherwise the type itself.
         """
         origin = get_origin(self._type)
@@ -149,16 +149,16 @@ class MiniDocStringType:
             if not isinstance(obj, list):
                 return False
             inner_type = self._get_inner_type()
-            return all(isinstance(elem, inner_type) for elem in obj)
+            return all(isinstance(elem, inner_type) for elem in cast(list[Any], obj))
 
         return isinstance(obj, self._type)
 
-    def matches_by_type(self, t: Type) -> bool:
+    def matches_by_type(self, t: Type[Any]) -> bool:
         """
         Check if a given type matches the expected type.
 
         Args:
-            t (Type):
+            t (Type[Any]):
                 The type to validate.
 
         Returns:
@@ -213,13 +213,13 @@ class MiniDocStringType:
 
         return type_str
 
-    def cast(self, value: str, allow_scalar_to_list: bool = False) -> Any:
+    def cast(self, value: str | None, allow_scalar_to_list: bool = False) -> Any:
         """
         Attempt to cast a string value to the target type.
 
         Args:
-            value (str):
-                The input value as a string.
+            value (str | None):
+                The input value as a string. May be None.
             allow_scalar_to_list (bool):
                 If True, a single scalar value will be promoted to a one-element list 
                 if the target type expects a list.
@@ -247,7 +247,7 @@ class MiniDocStringType:
                         raise ValueError(f"Expected a list, got {type(parsed).__name__}")
 
                 inner_type = self._get_inner_type()
-                return [inner_type(elem) for elem in parsed]
+                return [inner_type(elem) for elem in cast(list[Any], parsed)]
             except Exception as e:
                 raise ValueError(
                     f"Failed to cast list value '{value}' to {self.to_string()}: {e}"
@@ -315,7 +315,7 @@ class MiniDocString:
     _arg_name_to_object: dict[str, MiniDocStringArg]
     description_short: str = ""
     description_detailed: str = ""
-    args: list[MiniDocStringArg] = field(default_factory=list)
+    args: list[MiniDocStringArg] = field(default_factory=list[MiniDocStringArg])
     return_type: MiniDocStringType | None = None
     return_desc: str | None = None
     raises: str | None = None
@@ -392,16 +392,18 @@ class MiniDocString:
 
             if lines and (match := re.match(r"^\s*(\w+)\s*:\s*(.*)?", lines[0])):
                 self.return_type = MiniDocStringType(match[1])
-                self.return_desc = match[2] or ""
+                return_desc = match[2] or ""
 
                 if len(lines) > 1:
                     lines = lines[1:]
                     tabulator = cast(re.Match[str], re.match(r"^(\s*)", lines[0]))[1]
                     lines = [line[len(tabulator):].rstrip() for line in lines]
-                    if self.return_desc != "":
-                        self.return_desc += " " + " ".join(lines).strip()
+                    if return_desc != "":
+                        return_desc += " " + " ".join(lines).strip()
                     else:
-                        self.return_desc = " ".join(lines).strip()
+                        return_desc = " ".join(lines).strip()
+
+                self.return_desc = return_desc
             else:
                 self.return_type = None
                 self.return_desc = ' '.join(line.strip() for line in lines).strip()

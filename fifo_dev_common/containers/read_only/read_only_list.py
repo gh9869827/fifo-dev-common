@@ -1,9 +1,9 @@
 from collections.abc import Sequence
-from typing import TypeVar, Generic, Iterator, overload
+from typing import TypeVar, Generic, Iterator, cast, overload
 
 T = TypeVar("T")
 
-class ReadOnlyList(Sequence, Generic[T]):
+class ReadOnlyList(Sequence[T], Generic[T]):
     """
     A read-only wrapper around a list. Prevents mutation while allowing full read access.
 
@@ -76,9 +76,11 @@ class ReadOnlyList(Sequence, Generic[T]):
     def __repr__(self) -> str:
         return f"ReadOnlyList({self._data!r})"
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, ReadOnlyList):
-            return self._data == other._data
+            # Cast is for the type checker only; T is not enforced at runtime, but attribute access
+            # is safe for comparison
+            return self._data == cast(ReadOnlyList[T], other)._data
         if isinstance(other, Sequence):
             return self._data == other
         return False

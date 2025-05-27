@@ -1,8 +1,8 @@
-from typing import Type, TypeVar, Union, Tuple, cast
+from typing import Type, TypeVar, Tuple, cast
 
 T = TypeVar('T')
 
-def _format_type_name(tp: Union[Type, Tuple[Type, ...]]) -> str:
+def _format_type_name(tp: Type[T] | Tuple[Type[T], ...]) -> str:
     """
     Helper to format type names nicely for error messages.
     """
@@ -10,7 +10,7 @@ def _format_type_name(tp: Union[Type, Tuple[Type, ...]]) -> str:
         return ", ".join(t.__name__ for t in tp)
     return tp.__name__
 
-def strict_cast(tp: Union[Type[T], Tuple[Type, ...]], value: object) -> T:
+def strict_cast(tp: Type[T] | Tuple[Type[T], ...], value: object) -> T:
     """
     Perform a runtime type check before casting a value.
 
@@ -19,7 +19,7 @@ def strict_cast(tp: Union[Type[T], Tuple[Type, ...]], value: object) -> T:
     a `TypeError` is raised immediately.
 
     Args:
-        tp (Type[T] or Tuple[Type, ...]):
+        tp (Type[T] or Tuple[Type[T], ...]):
             The expected type or tuple of types to cast to.
         value (object):
             The value to check and cast.
@@ -42,8 +42,15 @@ def strict_cast(tp: Union[Type[T], Tuple[Type, ...]], value: object) -> T:
         >>> strict_cast(int, "not an int")
         TypeError: strict_cast failed: expected int, got str
     """
+    # avoid casting within a narrowed scope; this prevents Pylance from flagging the cast
+    # as unnecessary
+    value_ = value
+
+    # validating type
     if not isinstance(value, tp):
         raise TypeError(
             f"strict_cast failed: expected {_format_type_name(tp)}, got {type(value).__name__}"
         )
-    return cast(T, value)
+
+    # value/value_ is guaranteed to be type T after isinstance; cast for type checker
+    return cast(T, value_)

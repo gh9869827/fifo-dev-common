@@ -32,7 +32,7 @@ Python 3.10+ is required.
 Provides `strict_cast(tp, value)`, which raises a `TypeError` unless the value matches the expected
 type(s). Useful for defensive programming where `typing.cast()` is not strict enough.
 
-### `fifo_dev_common.docstring`
+### `fifo_dev_common.mini_docstring`
 
 Defines `MiniDocString`, a parser that converts a Google-style docstring into a structured object.  
 Includes runtime type checking via `MiniDocStringType` and support for YAML schema serialization.
@@ -49,7 +49,7 @@ Note: Nested contents are not recursively frozen, i.e. inner lists or dicts must
 
 ```python
 from fifo_dev_common.typeutils.cast import strict_cast
-from fifo_dev_common.introspection.docstring import MiniDocString
+from fifo_dev_common.introspection.mini_docstring import MiniDocString
 from fifo_dev_common.containers.read_only.read_only_list import ReadOnlyList
 
 value = strict_cast(int, 42)

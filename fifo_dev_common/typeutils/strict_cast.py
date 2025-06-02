@@ -12,11 +12,15 @@ def _format_type_name(tp: Type[T] | Tuple[Type[T], ...]) -> str:
 
 def strict_cast(tp: Type[T] | Tuple[Type[T], ...], value: object) -> T:
     """
-    Perform a runtime type check before casting a value.
+    Perform a shallow runtime type check before casting a value.
 
     Unlike `typing.cast`, this function enforces that the value is actually
     an instance of the specified type(s) at runtime. If the value does not match,
     a `TypeError` is raised immediately.
+
+    This check is **shallow**, verifying only the outermost type.
+    Generic types like `list[int]` are not supported; use `list`, not `list[int]`.
+    For example, `strict_cast(list, [1, "2"])` will pass, as the contents are not inspected.
 
     Args:
         tp (Type[T] or Tuple[Type[T], ...]):
@@ -38,6 +42,9 @@ def strict_cast(tp: Type[T] | Tuple[Type[T], ...], value: object) -> T:
 
         >>> strict_cast((str, bytes), b"hello")
         b'hello'
+
+        >>> strict_cast(list, [1, 2, 3])
+        [1, 2, 3]
 
         >>> strict_cast(int, "not an int")
         TypeError: strict_cast failed: expected int, got str

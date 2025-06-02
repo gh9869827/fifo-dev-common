@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import field, dataclass
 import re
 import ast
+from types import UnionType
 from typing import Any, Type, Union, cast, get_origin, get_args
 
 SUPPORTED_TYPES: dict[str, Type[Any]] = {
@@ -35,12 +36,12 @@ class MiniDocStringType:
     _type: Type[Any]
     _optional: bool
 
-    def __init__(self, type_input: str | Type[Any]):
+    def __init__(self, type_input: str | Type[Any] | UnionType):
         """
         Initializes the MiniDocStringType from a type string or a Python type.
 
         Args:
-            type_input (str | Type[Any]):
+            type_input (str | Type[Any] | UnionType):
                 Either a type description string or a Python type.
 
         Raises:
@@ -70,11 +71,17 @@ class MiniDocStringType:
 
             pytype_raw = Union[base_type, None] if is_optional else base_type
         else:
+            # Pylance infers that non-str inputs must be Type or UnionType from the hint.
+            # But users can pass anything at runtime, so we still need this runtime check.
+            if not isinstance(
+                type_input, type | UnionType
+            ):  # type: ignore[reportUnnecessaryIsInstance]
+                raise ValueError(f"Unsupported type input: {type_input!r}")
             pytype_raw = type_input
 
         self._optional = False
 
-        if get_origin(pytype_raw) is Union:
+        if get_origin(pytype_raw) in (Union, UnionType):
             args = get_args(pytype_raw)
             if len(args) == 2 and type(None) in args:
                 self._optional = True
@@ -181,9 +188,7 @@ class MiniDocStringType:
             str:
                 The string representation.
         """
-        opt, close = ("Optional[", "]") if self._optional else ("", "")
-
-        return f"ArgType({opt}{self._type}{close})"
+        return f"ArgType({self.to_string()})"
 
     def to_string(self, strip_optional: bool = False) -> str:
         """
@@ -240,24 +245,25 @@ class MiniDocStringType:
         if self._is_list():
             try:
                 parsed = ast.literal_eval(value)
-                if not isinstance(parsed, list):
-                    if allow_scalar_to_list:
-                        parsed = [parsed]
-                    else:
-                        raise ValueError(f"Expected a list, got {type(parsed).__name__}")
-
-                inner_type = self._get_inner_type()
-                return [inner_type(elem) for elem in cast(list[Any], parsed)]
             except Exception as e:
                 raise ValueError(
-                    f"Failed to cast list value '{value}' to {self.to_string()}: {e}"
+                    f"Failed to cast list value '{value}' to {self.to_string()}"
                 ) from e
+
+            if not isinstance(parsed, list):
+                if allow_scalar_to_list:
+                    parsed = [parsed]
+                else:
+                    raise ValueError(f"Expected a list, got {type(parsed).__name__}")
+
+            inner_type = self._get_inner_type()
+            return [inner_type(elem) for elem in cast(list[Any], parsed)]
         else:
             try:
                 return self._type(value)
             except Exception as e:
                 raise ValueError(
-                    f"Failed to cast value '{value}' to {self.to_string()}: {e}"
+                    f"Failed to cast value '{value}' to {self.to_string()}"
                 ) from e
 
 
@@ -345,6 +351,9 @@ class MiniDocString:
         else:
             lines = doc.splitlines()
             doc = ""
+
+        if not lines:
+            raise ValueError("Missing description before Args/Returns/Raises block")
 
         main_indent = cast(re.Match[str], re.match(r"^(\s*)", lines[0]))[1]
         lines = [line[len(main_indent):].rstrip() for line in lines]

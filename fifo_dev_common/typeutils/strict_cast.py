@@ -19,7 +19,8 @@ def strict_cast(tp: Type[T] | Tuple[Type[T], ...], value: object) -> T:
     a `TypeError` is raised immediately.
 
     This check is **shallow**, verifying only the outermost type.
-    Generic types like `list[int]` are not supported; use `list`, not `list[int]`.
+    Generic types like `list[int]` are supported for static type checkers (e.g., MyPy, Pylance),
+    but only the outer type (`list`) is enforced at runtime. Element types are not checked.
     For example, `strict_cast(list, [1, "2"])` will pass, as the contents are not inspected.
 
     Args:

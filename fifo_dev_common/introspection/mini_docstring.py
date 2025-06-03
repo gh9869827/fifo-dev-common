@@ -218,13 +218,14 @@ class MiniDocStringType:
 
         return type_str
 
-    def cast(self, value: str | None, allow_scalar_to_list: bool = False) -> Any:
+    def cast(self, value: str | int | None, allow_scalar_to_list: bool = False) -> Any:
         """
-        Attempt to cast a string value to the target type.
+        Attempt to cast a value (str or int) to the target type.
 
         Args:
-            value (str | None):
-                The input value as a string. May be None.
+            value (str | int | None):
+                The input value. May be a string, integer, or None.
+
             allow_scalar_to_list (bool):
                 If True, a single scalar value will be promoted to a one-element list 
                 if the target type expects a list.
@@ -243,12 +244,15 @@ class MiniDocStringType:
             raise ValueError(f"Cannot cast None to {self.to_string()}")
 
         if self._is_list():
-            try:
-                parsed = ast.literal_eval(value)
-            except Exception as e:
-                raise ValueError(
-                    f"Failed to cast list value '{value}' to {self.to_string()}"
-                ) from e
+            if isinstance(value, str):
+                try:
+                    parsed = ast.literal_eval(value)
+                except Exception as e:
+                    raise ValueError(
+                        f"Failed to cast list value '{value}' to {self.to_string()}"
+                    ) from e
+            else:
+                parsed = value
 
             if not isinstance(parsed, list):
                 if allow_scalar_to_list:

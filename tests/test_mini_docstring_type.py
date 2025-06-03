@@ -133,8 +133,15 @@ def test_to_string(type_str: str, strip_optional: bool, expected_str: str):
         ("float", "3.14", 3.14),
         ("str", "hello", "hello"),
         ("list[int]", "[1, 2, 3]", [1, 2, 3]),
+        ("list[int]", 42, [42]),
+        ("Optional[int]", None, None),
         ("list[str]", "['x', 'y']", ["x", "y"]),
         ("list[float]", "2.5", [2.5]),
+        ("list[float]", "[2.5, 4.2]", [2.5, 4.2]),
+        ("list[float]", 2.5, [2.5]),
+        ("list[float]", [2.5, 4.2], [2.5, 4.2]),
+        ("list[str]", "['a', 'b', 'c']", ["a", "b", "c"]),
+        ("str", "['a', 'b', 'c']", "['a', 'b', 'c']"),
     ]
 )
 def test_cast_valid(type_str: str, input_str: str, expected: Any):
@@ -150,6 +157,7 @@ def test_cast_valid(type_str: str, input_str: str, expected: Any):
         ("float", "oops", False, "Failed to cast value"),
         ("list[int]", "not-a-list", False, "Failed to cast list value"),
         ("list[str]", "42", False, "Expected a list"),
+        ("list[str]", "abc", False, "Failed to cast list value"),
     ]
 )
 def test_cast_invalid(

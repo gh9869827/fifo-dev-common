@@ -91,6 +91,22 @@ class MiniDocStringType:
         else:
             self._type = cast(Type[Any], pytype_raw)
 
+    def __eq__(self, other: object) -> bool:
+        """
+        Check whether two MiniDocStringType instances are equal.
+
+        Args:
+            other (object):
+                The object to compare against.
+
+        Returns:
+            bool:
+                True if both instances have the same type and optionality; False otherwise.
+        """
+        if not isinstance(other, MiniDocStringType):
+            return NotImplemented
+        return self._type == other._type and self._optional == other._optional
+
     def is_optional(self) -> bool:
         """
         Check if the argument or return value is optional (i.e., accepts None).

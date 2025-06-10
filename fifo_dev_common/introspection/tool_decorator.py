@@ -19,6 +19,7 @@ class ToolHandler(Protocol):
     tool_docstring: MiniDocString
     tool_name: str
     def to_schema_yaml(self) -> str: ...
+    def __call__(self, **kwargs: Any) -> Any: ...
 
 def tool_handler(name: str) -> Callable[[Callable[..., Any]], ToolHandler]:
     """

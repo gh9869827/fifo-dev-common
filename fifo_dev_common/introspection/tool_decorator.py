@@ -61,6 +61,7 @@ class ToolQuerySource(Protocol):
     source_docstring: MiniDocString
     source_name: str
     def get_description(self) -> str: ...
+    def __call__(self, **kwargs: Any) -> Any: ...
 
 _ALLOWED_PREFIXES = ("Returns", "Provides", "Gets", "Fetches", "Supplies")
 

@@ -233,14 +233,13 @@ class MiniDocStringType:
             type_str = f"Optional[{type_str}]"
 
         return type_str
-
-    def cast(self, value: str | int | None, allow_scalar_to_list: bool = False) -> Any:
+    def cast(self, value: str | int | list[Any] | None, allow_scalar_to_list: bool = False) -> Any:
         """
-        Attempt to cast a value (str or int) to the target type.
+        Attempt to cast a value (str, int, list, or None) to the target type.
 
         Args:
-            value (str | int | None):
-                The input value. May be a string, integer, or None.
+            value (str | int | list[Any] | None):
+                The input value. May be a string, integer, list, or None.
 
             allow_scalar_to_list (bool):
                 If True, a single scalar value will be promoted to a one-element list 
@@ -277,7 +276,12 @@ class MiniDocStringType:
                     raise ValueError(f"Expected a list, got {type(parsed).__name__}")
 
             inner_type = self._get_inner_type()
-            return [inner_type(elem) for elem in cast(list[Any], parsed)]
+            try:
+                return [inner_type(elem) for elem in cast(list[Any], parsed)]
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to cast elements of {parsed!r} to {self.to_string()}"
+                ) from e
         else:
             try:
                 return self._type(value)

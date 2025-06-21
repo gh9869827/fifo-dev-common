@@ -1,5 +1,6 @@
+from typing import Any
 import pytest
-from fifo_dev_common.introspection.mini_docstring import MiniDocString, MiniDocStringArg
+from fifo_dev_common.introspection.mini_docstring import MiniDocString, MiniDocStringArg, MiniDocStringType
 
 
 def test_parses_short_and_detailed_description():
@@ -203,3 +204,29 @@ def test_to_schema_yaml_structure():
   return:
     type: str
     description: confirmation"""
+
+
+@pytest.mark.parametrize(
+    "input_value,expected_output,should_raise",
+    [
+        ("['1', '2', '3']", [1, 2, 3], False),
+        (['1', '2', '3'], [1, 2, 3], False),
+        (['1', 2, '3'], [1, 2, 3], False),
+        (['1', ['2'], '3'], None, True),
+    ]
+)
+def test_cast_list_of_strings_to_list_of_ints_parametrized(
+    input_value: list[Any],
+    expected_output: list[Any] | None,
+    should_raise: bool
+):
+    type_parser = MiniDocStringType("list[int]")
+
+    if should_raise:
+        with pytest.raises(ValueError) as exc_info:
+            type_parser.cast(input_value)
+        assert "Failed to cast elements" in str(exc_info.value)
+    else:
+        result = type_parser.cast(input_value)
+        assert result == expected_output
+        assert all(isinstance(x, int) for x in result)

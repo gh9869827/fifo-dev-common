@@ -1,24 +1,54 @@
 import logging
+from typing import Optional
+
 
 TRACE_LEVEL_NUM = 5
 
-# Register TRACE level with logging if not already registered
-if not hasattr(logging, 'TRACE'):
-    logging.addLevelName(TRACE_LEVEL_NUM, 'TRACE')
-    def trace(self, message, *args, **kws):
+
+class _FifoLogger(logging.Logger):
+    """
+    Internal Logger subclass that adds support for the TRACE level.
+
+    Use `logger.trace(...)` to log at TRACE level (level 5).
+    """
+
+    def trace(self, msg: str, *args: object, **kwargs: object) -> None:
+        """
+        Log 'msg % args' with severity 'TRACE'.
+
+        Parameters:
+            msg (str):
+                The message format string.
+
+            *args:
+                Arguments for the message format string.
+
+            **kwargs:
+                Additional keyword arguments passed to the logger.
+        """
         if self.isEnabledFor(TRACE_LEVEL_NUM):
-            self._log(TRACE_LEVEL_NUM, message, args, **kws)
-    logging.Logger.trace = trace
-    logging.TRACE = TRACE_LEVEL_NUM
+            # type ignore is used because Pylance/mypy can't validate **kwargs types for _log()
+            self._log(TRACE_LEVEL_NUM, msg, args, **kwargs)  # type: ignore[arg-type]
 
 
-def get_logger(name: str | None = None) -> logging.Logger:
-    """Return a logger with TRACE level support.
+# Register TRACE level with logging
+logging.addLevelName(TRACE_LEVEL_NUM, "TRACE")
 
-    Args:
-        name: Optional logger name. ``None`` returns the root logger.
+# Use FifoLogger as the global logger class
+logging.setLoggerClass(_FifoLogger)
+
+def get_logger(name: Optional[str] = None) -> _FifoLogger:
+    """
+    Return a logger instance with TRACE level support.
+
+    Parameters:
+        name (str | None):
+            Logger name. `None` returns the root logger.
 
     Returns:
-        logging.Logger: Logger instance configured with TRACE level support.
+        FifoLogger:
+            Logger instance with `.trace()` method and TRACE level enabled.
     """
-    return logging.getLogger(name)
+    logger = logging.getLogger(name)
+    assert isinstance(logger, _FifoLogger)
+    return logger

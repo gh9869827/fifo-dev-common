@@ -6,16 +6,17 @@
 
 Shared core utilities for all `fifo-dev` repositories, under the `fifo_dev_common` namespace.
 
-This package provides foundational tools for runtime safety, docstring parsing, and LLM tool support:
+This package is designed to support the `fifo-dev` ecosystem with minimal dependencies. It provides the following for runtime type checks and casting, docstring parsing, and LLM tool support:
 
-- `strict_cast`: Runtime-enforced type casting.  
-- `MiniDocString`: Lightweight implementation designed specifically to parse Google-style docstrings
+- `strict_cast()`: Runtime-enforced type casting.  
+- `class MiniDocString`: Lightweight implementation designed specifically to parse Google-style docstrings
    and extract minimal, structured information for runtime type checking of inputs and outputs—ideal
    for LLM-based function calling and agent execution, without requiring any third-party dependencies.
-- `ReadOnlyList`: Immutable wrapper for list-like data.  
+- `class ReadOnlyList`: Immutable wrapper for list-like data.  
 - `@tool_handler` / `@tool_query_source`: Decorators for defining tools and query sources in LLM-based agents.
 
-It is designed to support the `fifo-dev` ecosystem with minimal dependencies and strong runtime guarantees.  
+See the [Example Usage](#-example-usage) section below for how these functions, classes, and decorators can be used.
+
 Primarily intended for internal use.
 
 ---
@@ -24,10 +25,10 @@ Primarily intended for internal use.
 
 - [📦 Install](#-install)
 - [🧩 Modules](#-modules)
-  - [strict_cast](#fifo_dev_commonstrict_cast)
-  - [mini_docstring](#fifo_dev_commonmini_docstring)
-  - [read_only_list](#fifo_dev_commonread_only_list)
-  - [tool_decorator](#fifo_dev_commontool_decorator)
+  - [strict_cast](#fifo_dev_commontypeutilsstrict_cast)
+  - [mini_docstring](#fifo_dev_commonintrospectionmini_docstring)
+  - [read_only_list](#fifo_dev_commoncontainersread_onlyread_only_list)
+  - [tool_decorator](#fifo_dev_commonintrospectiontool_decorator)
 - [✅ Example Usage](#-example-usage)
 - [🧪 Tests](#-tests)
 - [📄 License](#-license)
@@ -48,7 +49,7 @@ Python 3.10+ is required.
 
 ## 🧩 Modules
 
-### `fifo_dev_common.strict_cast`
+### `fifo_dev_common.typeutils.strict_cast`
 
 Defines `strict_cast(tp, value)` — a runtime-enforced version of `typing.cast()`.  
 Raises `TypeError` if the value does not match the expected type(s).  
@@ -56,7 +57,7 @@ Raises `TypeError` if the value does not match the expected type(s).
 
 ---
 
-### `fifo_dev_common.mini_docstring`
+### `fifo_dev_common.introspection.mini_docstring`
 
 Provides the `MiniDocString` class for parsing Google-style docstrings into structured form.  
 Includes:
@@ -68,7 +69,7 @@ Includes:
 
 ---
 
-### `fifo_dev_common.read_only_list`
+### `fifo_dev_common.containers.read_only.read_only_list`
 
 Implements `ReadOnlyList`, a lightweight wrapper that disables mutation of a list.  
 Supports indexing, iteration, equality, and containment.
@@ -78,26 +79,38 @@ Supports indexing, iteration, equality, and containment.
 
 ---
 
-### `fifo_dev_common.tool_decorator`
+### `fifo_dev_common.introspection.tool_decorator`
 
 Decorators to define tools and runtime query sources callable by large language models:
 
 - `@tool_handler(name)`: Declare a function as an executable tool with schema support.  
 - `@tool_query_source(name)`: Define a no-arg runtime data source that provides context for LLM execution planning.
 
-These attach structured metadata derived from docstrings and function signatures—enabling parsing, validation, and schema generation for transparent agent planning and execution.
+These attach structured metadata derived from docstrings—enabling parsing, validation, and schema generation for transparent agent planning and execution.
 
 ---
 
 ## ✅ Example Usage
 
+### `fifo_dev_common.typeutils.strict_cast` example
+
 ```python
-from fifo_dev_common.strict_cast import strict_cast
-from fifo_dev_common.mini_docstring import MiniDocString
-from fifo_dev_common.read_only_list import ReadOnlyList
-from fifo_dev_common.tool_decorator import tool_handler
+from fifo_dev_common.typeutils.strict_cast import strict_cast
 
 value = strict_cast(int, 42)
+
+try:
+    value = strict_cast(int, "42")
+except TypeError as e:
+    print(e)
+    # Output:
+    # TypeError: strict_cast failed: expected int, got str
+```
+
+### `fifo_dev_common.introspection.mini_docstring` example
+
+```python
+from fifo_dev_common.introspection.mini_docstring import MiniDocString
 
 doc = """
 Brief summary.
@@ -115,9 +128,33 @@ Returns:
 
 parsed = MiniDocString(doc)
 assert parsed.get_arg_by_name("task_id").pytype.to_string() == "int"
+assert parsed.return_desc == "The task description in serialized format."
+```
+
+### `fifo_dev_common.containers.read_only.read_only_list` example
+
+```python
+from fifo_dev_common.containers.read_only.read_only_list import ReadOnlyList
+
 
 items = ReadOnlyList([1, 2, 3])
-print(items[0])  # → 1
+print(items[0])
+# Output:
+# 1
+
+try:
+    # Pylance warning: "__setitem__" method not defined on type "ReadOnlyList[int]"
+    # Pylint warning: 'items' does not support item assignment
+    items[0] = 2
+except TypeError as e:
+    print(e)
+    # Output:
+    # TypeError: 'ReadOnlyList' object does not support item assignment
+```
+### `fifo_dev_common.introspection.tool_decorator` example
+
+```python
+from fifo_dev_common.introspection.tool_decorator import tool_handler
 
 @tool_handler("describe_task")
 def describe_task(task_id: int) -> str:
@@ -133,6 +170,19 @@ def describe_task(task_id: int) -> str:
             Description
     """
     return f"Task #{task_id}"
+
+print(describe_task.to_schema_yaml())
+# Output:
+# - intent: describe_task
+#   description: Describe the task based on its ID.
+#   parameters:
+#     - name: task_id
+#       type: int
+#       description: ID to fetch
+#       optional: False
+#   return:
+#     type: str
+#     description: Description
 ```
 
 ---

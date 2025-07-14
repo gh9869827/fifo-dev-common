@@ -119,7 +119,7 @@ Args:
     task_id (int):
         Unique identifier for the task.
     tags (list[str]):
-        Optional list of tags.
+        List of tags. Can be empty.
 
 Returns:
     str:
@@ -129,6 +129,33 @@ Returns:
 parsed = MiniDocString(doc)
 assert parsed.get_arg_by_name("task_id").pytype.to_string() == "int"
 assert parsed.return_desc == "The task description in serialized format."
+
+parsed.validate_runtime_args({
+    "task_id": 42,
+    "tags": ["tag1", "tag2", "tag3"]
+})
+# Validation completes successfully
+
+try:
+    parsed.validate_runtime_args({
+        "task_id": 42,
+        "tags": [1, 2, 3]
+    })
+except ValueError as e:
+    print(e)
+    # Output:
+    # ValueError: Argument 'tags' expected ArgType(list[str]), but got list
+
+try:
+    parsed.validate_runtime_args({
+        "task_id": 42,
+        "tags": ["tag1", "tag2", "tag3"],
+        "extra_args": "extra_value"
+    })
+except ValueError as e:
+    print(e)
+    # Output:
+    # Unexpected arguments: extra_args
 ```
 
 ### `fifo_dev_common.containers.read_only.read_only_list` example

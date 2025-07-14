@@ -1,7 +1,6 @@
 from __future__ import annotations
 from dataclasses import field, dataclass
 import re
-import ast
 from types import UnionType
 from typing import Any, Type, Union, cast, get_origin, get_args
 
@@ -13,6 +12,304 @@ SUPPORTED_TYPES: dict[str, Type[Any]] = {
     "str": str,
     "list[str]": list[str],
 }
+
+
+def _match_closing_quote(value: str, start_idx: int) -> int:
+    """
+    Finds the index of the matching closing quote in a quoted string, handling escaped quotes.
+
+    `start_idx` must point to the opening quote character (`'` or `"`).
+    The function iterates through `value`, skips escaped quotes,
+    and returns the index of the first unescaped matching closing quote.
+
+    Parameters:
+        value (str):
+            The input string containing a quoted substring.
+
+        start_idx (int):
+            The index of the opening quote character in `value`. Must point to `'` or `"`.
+
+    Returns:
+        int:
+            The index of the first unescaped matching closing quote.
+
+    Raises:
+        ValueError:
+            If `start_idx` is out of bounds (including the case where `value` is empty):
+                "String value is empty."
+            If the character at `start_idx` is not a valid quote character (`'` or `"`):
+                "String value does not start by a valid quote."
+            If no matching closing quote is found before the end of `value`:
+                "String value does not end by a valid quote."
+
+    Example:
+        _match_closing_quote('"test" more', 0) -> 5
+        _match_closing_quote("'a\\'b'", 0) -> 5
+    """
+    if start_idx >= len(value):
+        raise ValueError("String value is empty.")
+
+    quote = value[start_idx]
+    if quote not in ("'", '"'):
+        raise ValueError("String value does not start by a valid quote.")
+
+    escaped = False
+    for i, c in enumerate(value[start_idx + 1:], start=start_idx + 1):
+        if not escaped and c == quote:
+            return i
+        if not escaped and c == "\\":
+            escaped = True
+        else:
+            escaped = False
+
+    raise ValueError("String value does not end by a valid quote.")
+
+
+def _split_by_coma(value: str) -> list[str]:
+    """
+    Splits a string by commas, preserving quoted substrings and handling escaped quotes.
+
+    Blanks are considered space and tab characters.
+
+    The input is expected to contain integers, floats, or strings (single or double quoted,
+    with support for escaped quotes), separated by commas.
+
+    **Numeric token validation:**
+        - Unquoted tokens must consist only of the characters: '0123456789.+-'.
+        - The function does **not validate the numeric format** itself.
+          For example, '41-4' is considered valid at this stage and will be emitted in the output
+          list. Proper parsing and format validation is the caller's responsibility.
+
+    The function treats commas as separators, except when they appear inside a quoted string.
+
+    **Whitespace handling:**
+        - Leading blanks before each token are skipped (they do not become part of the token).
+        - Trailing blanks after each tokens are skipped (they do not become part of the token).
+        - Blanks inside quoted strings are preserved as-is.
+
+    **Security note:**
+        Escaped characters are **not unescaped**. This intentional design choice
+        avoids decoding strings for unescaping, reducing the risk of injection vulnerabilities.
+
+    Parameters:
+        value (str):
+            The input string to split. It is expected to contain integers, floats, or strings 
+            (single or double quoted, with support for escaped quotes), separated by commas.
+
+    Returns:
+        list[str]:
+            A list of substrings split by commas, where quoted substrings are preserved as-is.
+            If the input ends with a comma, an empty string is appended to the result.
+
+    Example:
+        _split_by_coma('"a,b", 42, "c"') -> ['"a,b"', '42', '"c"']
+        _split_by_coma('1, 2, 3') -> ['1', '2', '3']
+        _split_by_coma('"test"') -> ['"test"']
+        _split_by_coma('') -> []
+
+    Raises:
+        ValueError:
+            If quoted strings are not properly closed:
+                "String value does not end by a valid quote."
+            If a value is not properly comma-separated from the next token:
+                "Missing delimiter."
+            If an unquoted value contains invalid characters:
+                "Invalid character in numerical value."
+    """
+    if len(value) == 0:
+        return []
+
+    i: int = 0
+    start_idx: int = 0
+    lst: list[str] = []
+    while i < len(value):
+
+        while i < len(value) and value[i] in [' ', '\t']:
+            # skip leading blanks
+            i += 1
+
+        start_idx = i
+
+        if value[i] in ("'", '"'):
+            # skip the string and goes to the closing quote
+            i = _match_closing_quote(value, start_idx)
+            # we move after the string
+            i += 1
+        else:
+            # we have a non string value... we find the first blank or coma
+            while i < len(value) and value[i] not in [' ', '\t', ',']:
+                if value[i] not in "0123456789.-+":
+                    raise ValueError("Invalid character in numerical value.")
+                i += 1
+
+        lst.append(value[start_idx:i])
+
+        # if we are not at the end of the string, we are either at the closing quote
+        # or at the begining of a number... we find the next ,
+        while i < len(value) and value[i] != ',':
+            if value[i] not in [' ', '\t']:
+                raise ValueError("Missing delimiter.")
+            i += 1
+
+        if i < len(value):
+            i += 1
+            start_idx = i
+
+    if start_idx == len(value):
+        lst.append("")
+
+    return lst
+
+
+def _parse_str_to_scalar_supported_type(value: str) -> int | float | str:
+    """
+    Parses a string into a scalar type: int, float, or str.
+
+    The input is assumed to come from `_split_by_coma`, meaning:
+        - Quoted strings are well-formed (properly closed).
+        - Values are already stripped of leading/trailing blanks.
+
+    **Supported types:**
+        - int
+        - float
+        - str: 
+            A string must start and end with matching single (`'`) or double (`"`) quotes.
+            Mixing quotes is not allowed (e.g., `"test'` is invalid).
+            Strings can contain escaped quotes, but **no unescaping is performed**.
+            For example, input '"\\"test\\""' returns '\\"test\\"'.
+
+    **Parsing order:**
+        - If the value starts with `'` or `"`, it is treated as a string literal.
+        - Otherwise, an attempt is made to parse it as `int`, then as `float`.
+        - If both conversions fail, the function raises a `ValueError`.
+
+    **Security note:**
+        Escaped characters are **not unescaped**. This intentional design choice
+        avoids decoding strings for unescaping, reducing the risk of injection vulnerabilities.
+
+    Parameters:
+        value (str):
+            The string to parse into int, float, or str. Must be non-empty.
+
+    Returns:
+        int | float | str:
+            The parsed value, either as an integer, float, or string (with quotes removed).
+
+    Raises:
+        ValueError:
+            If `value` is not a string type:
+                "Value is not a string and cannot be converted."
+            If `value` is an empty string:
+                "Empty value."
+            If a quoted string is not properly terminated:
+                "String is not terminated properly."
+            If the value cannot be parsed into int, float, or str:
+                "Unsupported type."
+    """
+    # even if value is typed as str, it needs to be checked at runtime
+    if isinstance(value, str) is False: # type: ignore
+        raise ValueError("Value is not a string and cannot be converted.")
+
+    if len(value) == 0:
+        raise ValueError("Empty value.")
+
+    if value[0] in ( "'", '"'):
+        if len(value) == 1 or value[-1] != value[0]:
+            raise ValueError("String is not terminated properly.")
+        return value[1:-1]
+
+    try:
+        return int(value)
+    except ValueError:
+        try:
+            return float(value)
+        except ValueError as e:
+            raise ValueError("Unsupported type.") from e
+
+
+def _parse_str_to_supported_type(
+        value: str
+) -> int | float | str | list[int] | list[float] | list[str]:
+    """
+    Parses a string into a supported type: int, float, str, or a list of these scalar types.
+    No nested lists are allowed.
+
+    **Supported types:**
+        - int
+        - float (scientific notation, e.g., `1e-6`, is **not supported** and is considered invalid)
+        - str:
+            A string must start and end with matching single (`'`) or double (`"`) quotes.
+            Mixing quotes is not allowed (e.g., `"test'` is invalid).
+            Strings can contain escaped quotes, but **no unescaping is performed**.
+            For example, input '"\\"test\\""' returns '\\"test\\"'.
+        - list of int, list of float, or list of str:
+            Lists must be enclosed in square brackets `[ ]`.
+            Elements inside the list must be separated by commas.
+            All elements in the list must be of the **same type** (no mixing of int, float,
+            and str).
+
+    **Parsing rules:**
+        - If the input starts with `[`, it is treated as a list.
+        - If the input does not start with `[`, it must contain a single scalar value.
+          Multiple scalars separated by commas without enclosing brackets are rejected.
+
+    **Security note:**
+        Escaped characters are **not unescaped**. This intentional design choice
+        avoids decoding strings for unescaping, reducing the risk of injection vulnerabilities.
+
+    Parameters:
+        value (str):
+            The string to parse into an int, float, str, or a list of these scalar types.
+
+    Returns:
+        int | float | str | list[int] | list[float] | list[str]:
+            The parsed scalar or list of scalars. List elements are of the same type. If they are
+            not an exception is raised.
+
+    Raises:
+        ValueError:
+            If `value` is empty:
+                "Empty value."
+            If a list is not properly closed with `]`:
+                "List of values not closed by ]."
+            If multiple comma-separated values are provided without list brackets:
+                "List of values not enclosed in []."
+            If elements in a list are of mixed types:
+                "Type of values mismatch."
+    """
+    value = value.strip()
+
+    if len(value) == 0:
+        raise ValueError("Empty value.")
+
+    if value[0] == "[":
+        # an array: parse all values it contains. The array should only contains scalars.
+        if len(value) == 1 or value[-1] != "]":
+            raise ValueError("List of values not closed by ].")
+
+        lst = _split_by_coma(value[1:-1])
+
+        if len(lst) == 0:
+            return []
+
+        parsed_value = [_parse_str_to_scalar_supported_type(v) for v in lst]
+
+        for v in parsed_value[1:]:
+            if not isinstance(v, type(parsed_value[0])):
+                raise ValueError("Type of values mismatch.")
+
+        if isinstance(parsed_value[0], int):
+            return cast(list[int], parsed_value)
+        if isinstance(parsed_value[0], float):
+            return cast(list[float], parsed_value)
+        return cast(list[str], parsed_value)
+
+    else:
+        lst = _split_by_coma(value)
+        if len(lst) != 1:
+            raise ValueError("List of values not enclosed in [].")
+        return _parse_str_to_scalar_supported_type(lst[0])
+
 
 class MiniDocStringType:
     """
@@ -233,6 +530,7 @@ class MiniDocStringType:
             type_str = f"Optional[{type_str}]"
 
         return type_str
+
     def cast(self, value: str | int | list[Any] | None, allow_scalar_to_list: bool = False) -> Any:
         """
         Attempt to cast a value (str, int, list, or None) to the target type.
@@ -261,7 +559,7 @@ class MiniDocStringType:
         if self._is_list():
             if isinstance(value, str):
                 try:
-                    parsed = ast.literal_eval(value)
+                    parsed = _parse_str_to_supported_type(value)
                 except Exception as e:
                     raise ValueError(
                         f"Failed to cast list value '{value}' to {self.to_string()}"
@@ -271,7 +569,7 @@ class MiniDocStringType:
 
             if not isinstance(parsed, list):
                 if allow_scalar_to_list:
-                    parsed = [parsed]
+                    parsed = cast(list[int] | list[float] | list[str], [parsed])
                 else:
                     raise ValueError(f"Expected a list, got {type(parsed).__name__}")
 

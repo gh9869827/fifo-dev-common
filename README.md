@@ -17,12 +17,11 @@ This package is designed to support the `fifo-dev` ecosystem with minimal depend
 
 See the [Example Usage](#-example-usage) section below for how these functions, classes, and decorators can be used.
 
-Primarily intended for internal use.
-
 ---
 
 ## 📚 Table of Contents
 
+- [🎯 Project Status & Audience](#-project-status--audience)
 - [📦 Install](#-install)
 - [🧩 Modules](#-modules)
   - [strict_cast](#fifo_dev_commontypeutilsstrict_cast)
@@ -32,6 +31,21 @@ Primarily intended for internal use.
 - [✅ Example Usage](#-example-usage)
 - [🧪 Tests](#-tests)
 - [📄 License](#-license)
+
+---
+
+## 🎯 Project Status & Audience
+
+🚧 **Work in Progress** — This project is in **early development**. 🚧
+
+This is a personal project developed and maintained by a solo developer.  
+Contributions, ideas, and feedback are welcome, but development is driven by personal time and priorities.
+
+`fifo-dev-common` provides **shared core utilities** for other `fifo-dev-*` projects developed by the author.  
+It is **primarily developed to support those projects**, but **individual developers experimenting with the ecosystem are welcome to explore and use it.**
+
+No official release or pre-release has been published yet. The code is provided for **preview and experimentation**.  
+**Use at your own risk.**
 
 ---
 

@@ -8,7 +8,9 @@ authors = [
 license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+  "numpy"
+]
 
 [build-system]
 requires = ["setuptools>=61.0"]

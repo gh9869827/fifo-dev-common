@@ -1,0 +1,220 @@
+from __future__ import annotations
+from dataclasses import dataclass, field
+from enum import IntEnum
+from types import SimpleNamespace
+from typing import Any, Type
+import pytest
+import math
+from fifo_dev_common.serialization.fifo_serialization import FifoSerializable, serializable, compile_field
+
+
+def floats_equal_list(list1: list[float],
+                      list2: list[float],
+                      rel_tol: float=1e-6,
+                      abs_tol: float=1e-8):
+    assert len(list1) == len(list2)
+    for a, b in zip(list1, list2):
+        assert math.isclose(a, b, rel_tol=rel_tol, abs_tol=abs_tol), f"{a} != {b}"
+
+
+class TestEnum(IntEnum):
+    A = 1
+    B = 2
+
+@serializable
+@dataclass
+class TestSerializeEnum(FifoSerializable):
+    a: TestEnum = field(metadata={"format": "E<I>", "ptype": TestEnum})
+    b: TestEnum = field(metadata={"format": "E<I>", "ptype": TestEnum})
+
+def test_serialize_enum():
+    test = TestSerializeEnum(TestEnum.A, TestEnum.B)
+
+    byte_size = test.serialized_byte_size()
+
+    assert byte_size == 8
+
+    buffer = bytearray(byte_size)
+
+    test.serialize_to_bytes(buffer, 0)
+
+    deserialized_test, _ = TestSerializeEnum.deserialize_from_bytes(buffer, 0)
+
+    assert type(deserialized_test.a) == TestEnum
+    assert type(deserialized_test.b) == TestEnum
+
+    assert deserialized_test.a == TestEnum.A
+    assert deserialized_test.b == TestEnum.B
+
+
+
+@serializable
+@dataclass
+class TestBasic(FifoSerializable):
+    a: int = field(metadata={"format": "I"})
+    b: int = field(metadata={"format": "I"})
+
+def test_basic():
+    test = TestBasic(42, 51)
+
+    byte_size = test.serialized_byte_size()
+
+    assert byte_size == 8
+
+    buffer = bytearray(byte_size)
+
+    test.serialize_to_bytes(buffer, 0)
+
+    deserialized_test, _ = TestBasic.deserialize_from_bytes(buffer, 0)
+
+    assert deserialized_test.a == 42
+    assert deserialized_test.b == 51
+
+
+@serializable
+@dataclass
+class TestOptional(FifoSerializable):
+    a: int | None = field(metadata={"format": "?I"})
+    b: int | None = field(metadata={"format": "?I"})
+
+def test_optional():
+    test = TestOptional(None, 51)
+
+    byte_size = test.serialized_byte_size()
+
+    assert byte_size == 6
+
+    buffer = bytearray(byte_size)
+
+    test.serialize_to_bytes(buffer, 0)
+
+    deserialized_test, _ = TestOptional.deserialize_from_bytes(buffer, 0)
+
+    assert deserialized_test.a is None
+    assert deserialized_test.b == 51
+
+
+@serializable
+@dataclass
+class TestArray(FifoSerializable):
+    lst1: list[float] = field(metadata={"format": "[f]"})
+    lst2: list[int]   = field(metadata={"format": "[I]"})
+
+def test_array():
+    l1 = [1.2, 3.4]
+    l2 = [1, 2, 3, 4]
+    test = TestArray(l1, l2)
+
+    byte_size = test.serialized_byte_size()
+
+    assert byte_size == (len(l1) + len(l2)) * 4 + 4 + 4
+
+    buffer = bytearray(byte_size)
+
+    test.serialize_to_bytes(buffer, 0)
+
+    deserialized_test, _ = TestArray.deserialize_from_bytes(buffer, 0)
+
+    floats_equal_list(deserialized_test.lst1, l1)
+    assert deserialized_test.lst2 == l2
+
+
+@serializable
+@dataclass
+class TestSuperCombo(FifoSerializable):
+    arr: TestArray                = field(metadata={ "ptype": TestArray })
+    opt: TestOptional             = field(metadata={ "ptype": TestOptional })
+    basic: TestBasic              = field(metadata={ "ptype": TestBasic })
+    opt_arr: TestArray | None     = field(metadata={ "format": "?_", "ptype": TestArray })
+    opt_opt: TestOptional | None  = field(metadata={ "format": "?_", "ptype": TestOptional })
+    opt_basic: TestBasic | None   = field(metadata={ "format": "?_", "ptype": TestBasic })
+    lst_arr: list[TestArray]      = field(metadata={ "format": "[_]", "ptype": TestArray })
+    lst_opt: list[TestOptional]   = field(metadata={ "format": "[_]", "ptype": TestOptional })
+    lst_basic: list[TestBasic]    = field(metadata={ "format": "[_]", "ptype": TestBasic })
+
+def test_super_combo():
+    arr = TestArray([1.2, 3.4], [1, 2, 3])
+    opt = TestOptional(10, None)
+    basic = TestBasic(42, 99)
+
+    opt_arr = TestArray([7.8], [9])
+    opt_opt = None
+    opt_basic = TestBasic(123, 456)
+
+    lst_arr = [TestArray([5.5], [6]), TestArray([7.7, 8.8], [9, 10])]
+    lst_opt = [TestOptional(None, 2), TestOptional(5, 6)]
+    lst_basic = [TestBasic(1, 2), TestBasic(3, 4), TestBasic(5, 6)]
+
+    combo = TestSuperCombo(
+        arr=arr,
+        opt=opt,
+        basic=basic,
+        opt_arr=opt_arr,
+        opt_opt=opt_opt,
+        opt_basic=opt_basic,
+        lst_arr=lst_arr,
+        lst_opt=lst_opt,
+        lst_basic=lst_basic,
+    )
+
+    buf = bytearray(combo.serialized_byte_size())
+    combo.serialize_to_bytes(buf, 0)
+    deserialized, _ = TestSuperCombo.deserialize_from_bytes(buf, 0)
+
+    # Check that all fields match (robust to float precision)
+    floats_equal_list(deserialized.arr.lst1, arr.lst1)
+    assert deserialized.arr.lst2 == arr.lst2
+
+    assert deserialized.opt.a == opt.a
+    assert deserialized.opt.b == opt.b
+    assert deserialized.basic.a == basic.a
+    assert deserialized.basic.b == basic.b
+
+    assert deserialized.opt_arr is not None and deserialized.opt_arr.lst2 == opt_arr.lst2
+    floats_equal_list(deserialized.opt_arr.lst1, opt_arr.lst1)
+
+    assert deserialized.opt_opt is None
+    assert deserialized.opt_basic is not None
+    assert deserialized.opt_basic.a == opt_basic.a
+    assert deserialized.opt_basic.b == opt_basic.b
+
+    assert len(deserialized.lst_arr) == len(lst_arr)
+    for d, o in zip(deserialized.lst_arr, lst_arr):
+        floats_equal_list(d.lst1, o.lst1)
+        assert d.lst2 == o.lst2
+
+    assert len(deserialized.lst_opt) == len(lst_opt)
+    for d, o in zip(deserialized.lst_opt, lst_opt):
+        assert d.a == o.a and d.b == o.b
+
+    assert len(deserialized.lst_basic) == len(lst_basic)
+    for d, o in zip(deserialized.lst_basic, lst_basic):
+        assert d.a == o.a and d.b == o.b
+
+
+@pytest.mark.parametrize("format_string,ptype,err_msg", [
+    ("[f", None, "Struct format for array type invalid"),
+    ("[__", None, "Struct format for array type invalid"),
+    ("[",   None, "Struct format for array type invalid"),
+    ("[_]", None, "Type must be provided for generic array"),
+
+    ("?",   None, "Struct format for optional type invalid"),
+    ("?__", None, "Struct format for optional type invalid"),
+    ("?_",  None, "Type must be provided for generic optional"),
+
+    ("E<",  None, "Struct format for enum type invalid"),
+    ("E<>",  None, "Struct format for enum type invalid"),
+    ("E<_>",  None, "Struct only support I format for now"),
+    ("E<i>",  None, "Struct only support I format for now"),
+    ("E<I>",  None, "Type must be provided for Struct"),
+
+    (None,  None, "Type or Struct format must be provided"),
+])
+def test_compile_field_value_errors(format_string: str | None, ptype: Type[Any] | None, err_msg: str):
+    metadata = {}
+    if format_string is not None:
+        metadata["format"] = format_string
+    # Simulate a dataclass Field with .name and .metadata
+    mock_field = SimpleNamespace(name="x", metadata=metadata, ptype=ptype)
+    with pytest.raises(ValueError, match=err_msg):
+        compile_field(mock_field)  # type: ignore[arg-type]

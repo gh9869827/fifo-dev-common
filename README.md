@@ -110,16 +110,45 @@ Decorators to define tools and runtime query sources callable by large language 
 
 These attach structured metadata derived from docstrings—enabling parsing, validation, and schema generation for transparent agent planning and execution.
 
+### `fifo_dev_common.serialization.fifo_serialization`
+
+Provides a lightweight, efficient binary serialization framework for Python dataclasses.
+
+- `@serializable`: Decorator to enable serialization/deserialization on dataclasses.  
+- Supports scalar types, enums, optional fields, and arrays.  
+- Uses dataclass `field` metadata (e.g., `format`, `ptype`) for flexible, extensible field definitions.  
+- Designed for preallocated buffers to maximize performance and minimize allocations.  
+- Works well with microcontroller and embedded system data formats as it is a compact binary format prioritizing direct raw serialization with very little overhead.
+
+**Supported format strings examples:**
+
+| Format String | Description                                  | Serialization Details                            | Example                                  |
+|---------------|----------------------------------------------|-------------------------------------------------|------------------------------------------|
+| `I`           | Unsigned 4-byte integer                      | 4 bytes little-endian integer                    | `field(metadata={"format": "I"})`        |
+| `f`           | 4-byte float                                 | 4 bytes little-endian float                      | `field(metadata={"format": "f"})`        |
+| `[f]`         | Array of floats                              | 4-byte length prefix + consecutive float values | `field(metadata={"format": "[f]"})`      |
+| `[I]`         | Array of unsigned ints                       | 4-byte length prefix + consecutive uint32 values| `field(metadata={"format": "[I]"})`      |
+| `?I`          | Optional unsigned int (presence flag + value) | 1 byte presence flag (0/1) + 4-byte uint if present | `field(metadata={"format": "?I"})`        |
+| `?_`          | Optional nested serializable object (`_` is literal) | 1 byte presence flag + serialized nested object if present | `field(metadata={"format": "?_", "ptype": MyClass})` |
+| `[_]`         | Array of nested serializable objects (`_` is literal) | 4-byte length prefix + serialized nested objects in sequence | `field(metadata={"format": "[_]", "ptype": MyClass})` |
+| `E<I>`        | Enum stored as unsigned 4-byte int (only `I` supported) | 4-byte uint representing the Enum value          | `field(metadata={"format": "E<I>", "ptype": MyEnum})` |
+
+**Note:** Standard [Python `struct` format characters](https://docs.python.org/3/library/struct.html#format-characters) are supported for scalar types, such as `B`, `b`, `H`, `h`, `I`, `i`, `Q`, `q`, `f`, and `d`.
+
+---
+
 ### `fifo_dev_common.event.fifo_event`
 
-Defines the `FifoEvent` base class for efficient, binary-serializable events with priority support, factory deserialization, and extensible field definitions.
+Defines the `FifoEvent` base class for priority-aware, factory-registered event types.
 
-- `@serializable(fields)`: Decorator to declare serializable fields via `FieldSpec`, supporting scalars, enums, and composite types.
-- `@FifoEvent.register`: Decorator to register subclasses for factory-based deserialization.
-- `to_bytes()`, `from_bytes()`: Serialize/deserialize complete event packets, including a 4-byte event ID and 4-byte priority.
-- Extensible: Supports custom (de)serialization logic per field with `from_fields`/`to_fields` callables in `FieldSpec`.
-
-Designed for interoperability with microcontrollers, low-level protocols, and systems needing compact, robust event encoding.
+- Supports event ID defined as a class-level attribute.
+- Supports priority with a class-level default that can be overridden at instantiation.
+- Uses `@FifoEvent.register` to register event subclasses for factory-based deserialization.
+- Supports serialization/deserialization by:
+  - Inheriting from `FifoSerializable`.
+  - Using the `@serializable` decorator.
+  - Automatically serializing the event header (event ID) alongside the payload (which includes priority).
+- Designed for efficient, compact event exchange in embedded and distributed systems.
 
 ---
 
@@ -245,50 +274,81 @@ print(describe_task.to_schema_yaml())
 #     description: Description
 ```
 
+### `fifo_dev_common.serialization.fifo_serialization` example
+
+```python
+from dataclasses import dataclass, field
+from typing import List
+from fifo_dev_common.serialization.fifo_serialization import FifoSerializable, serializable
+
+@serializable
+@dataclass
+class SensorReadings(FifoSerializable):
+    temperature: float = field(metadata={"format": "f"})
+    humidity: float = field(metadata={"format": "f"})
+
+@serializable
+@dataclass
+class SensorArray(FifoSerializable):
+    readings: List[SensorReadings] = field(metadata={"format": "[_]", "ptype": SensorReadings})
+
+# Usage
+s1 = SensorReadings(temperature=22.5, humidity=40.0)
+s2 = SensorReadings(temperature=23.0, humidity=38.5)
+sensor_data = SensorArray(readings=[s1, s2])
+
+buffer = bytearray(sensor_data.serialized_byte_size())
+sensor_data.serialize_to_bytes(buffer, 0)
+
+deserialized, _ = SensorArray.deserialize_from_bytes(buffer, 0)
+assert len(deserialized.readings) == 2
+assert abs(deserialized.readings[0].temperature - 22.5) < 1e-6
+assert abs(deserialized.readings[1].humidity - 38.5) < 1e-6
+```
+
+
 ### `fifo_dev_common.event.fifo_event` example
 
 ```python
-from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Tuple
-from fifo_dev_common.event.fifo_event import FifoEvent, serializable, FieldSpec
+from typing import ClassVar
+
+from fifo_dev_common.event.fifo_event import FifoEvent, serializable
 
 class State(IntEnum):
     INIT = 1
     RUN = 2
     DONE = 3
 
+@serializable
 @dataclass
 class Point:
-    x: int
-    y: int
-
-    @staticmethod
-    def from_fields(values: tuple[int, int]) -> Point:
-        return Point(values[0], values[1])
-
-    def to_fields(self) -> Tuple[int, int]:
-        return (self.x, self.y)
+    x: int = field(metadata={"format": "i"})
+    y: int = field(metadata={"format": "i"})
 
 @FifoEvent.register
-@serializable([
-    FieldSpec("score", "i"),  # int
-    FieldSpec("state", "i", from_fields=State, to_fields=int),  # IntEnum: cast to/from int
-    FieldSpec("position", "II", from_fields=Point.from_fields, to_fields=Point.to_fields)  # dataclass
-])
+@serializable
+@dataclass(kw_only=True)
 class DemoEvent(FifoEvent):
-    event_id = 99
-    default_priority = 3
+    event_id: ClassVar[int] = 99
+    default_priority: ClassVar[int] = 3
 
-    def __init__(self, score: int, state: State, position: Point, priority: int | None = None):
-        super().__init__(priority)
+    score: int = field(metadata={"format": "i"})
+    state: State = field(metadata={"format": "E<I>", "ptype": State})
+    position: Point = field(metadata={"ptype": Point})
+
+    def __init__(self, score: int, state: State, position: Point, priority: int = -1):
+        super().__init__(priority=priority)
         self.score = score
         self.state = state
         self.position = position
 
-evt = DemoEvent(42, State.RUN, Point(7, 8), priority=77)
+# Usage example:
+evt = DemoEvent(score=42, state=State.RUN, position=Point(7, 8), priority=77)
+
 blob = evt.to_bytes()
+
 restored = FifoEvent.from_bytes(blob)
 assert isinstance(restored, DemoEvent)
 assert restored.score == 42

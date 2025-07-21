@@ -1,17 +1,3 @@
-"""
-fifo_event.py
-
-Serializable base class for events used in `fifo-*` projects, suitable for cross-platform use
-(including microcontrollers).
-
-- Event ID is always serialized as a 4-byte unsigned int ('I'), little-endian.
-- Event priority is serialized as a 4-byte signed int ('i'), immediately after the event ID.
-- Subclasses should override `event_id` and declare serializable fields using the
-  @serializable class decorator and `FieldSpec` descriptors.
-- Field serialization supports composite fields and custom packing/unpacking logic via
-  optional `from_fields` and `to_fields` callables.
-"""
-
 from __future__ import annotations
 from abc import ABC
 import abc

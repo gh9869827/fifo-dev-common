@@ -165,7 +165,7 @@ class TestOptionalArray(FifoSerializable):
 
 
 def test_optional_array():
-    arr = [TestBasic(1, 2), None, TestBasic(3, 4)]
+    arr: list[TestBasic | None] = [TestBasic(1, 2), None, TestBasic(3, 4)]
     obj = TestOptionalArray(arr)
 
     size = obj.serialized_byte_size()
@@ -177,6 +177,7 @@ def test_optional_array():
 
     restored, _ = TestOptionalArray.deserialize_from_bytes(buf, 0)
     assert restored.items[1] is None
+    assert restored.items[0] is not None and restored.items[2] is not None
     assert restored.items[0].a == 1 and restored.items[2].b == 4
 
 

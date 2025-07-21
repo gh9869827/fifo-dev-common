@@ -132,7 +132,7 @@ Provides a lightweight, efficient binary serialization framework for Python data
 | `?_`          | Optional nested serializable object (`_` is literal) | 1 byte presence flag + serialized nested object if present | `field(metadata={"format": "?_", "ptype": MyClass})` |
 | `[_]`         | Array of nested serializable objects (`_` is literal) | 4-byte length prefix + serialized nested objects in sequence | `field(metadata={"format": "[_]", "ptype": MyClass})` |
 | `[?_]`        | Array of optional nested objects (`_` is literal) | 4-byte length + presence bitmap + serialized present objects | `field(metadata={"format": "[?_]", "ptype": MyClass})` |
-| `E<I>`        | Enum stored as unsigned 4-byte int (only `I` supported) | 4-byte uint representing the Enum value          | `field(metadata={"format": "E<I>", "ptype": MyEnum})` |
+| `E<x>`        | Enum stored as integer type `x` (`b`, `B`, `h`, `H`, `i`, `I`) | Integer representing the Enum value using chosen size | `field(metadata={"format": "E<B>", "ptype": MyEnum})` |
 | `T<x>`        | Fixed-length tuple of basic types            | Raw binary data for each tuple element           | `field(metadata={"format": "T<If>"})` |
 
 **Note:** Standard [Python `struct` format characters](https://docs.python.org/3/library/struct.html#format-characters) are supported for scalar types, such as `B`, `b`, `H`, `h`, `I`, `i`, `Q`, `q`, `f`, and `d`.
@@ -353,7 +353,7 @@ class DemoEvent(FifoEvent):
     default_priority: ClassVar[int] = 3
 
     score: int = field(metadata={"format": "i"})
-    state: State = field(metadata={"format": "E<I>", "ptype": State})
+    state: State = field(metadata={"format": "E<B>", "ptype": State})
     position: Point = field(metadata={"ptype": Point})
 
     def __init__(self, score: int, state: State, position: Point, priority: int = -1):

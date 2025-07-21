@@ -129,8 +129,9 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
 
             inner_type = struct_format[2]
 
-            if inner_type != "I":
-                raise ValueError("Struct only support I format for now")
+            supported_enum_ints = {"b", "B", "h", "H", "i", "I"}
+            if inner_type not in supported_enum_ints:
+                raise ValueError("Struct only supports integer formats bBhHiI")
 
             if ptype is None:
                 raise ValueError("Type must be provided for Struct")

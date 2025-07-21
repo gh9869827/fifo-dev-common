@@ -142,8 +142,6 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
             if not (len(struct_format) >= 4 and struct_format[-1] == ">"):
                 raise ValueError("Struct format for tuple type invalid")
             inner_types = struct_format[2:-1]
-            if len(inner_types) == 0:
-                raise ValueError("Struct format for tuple type invalid")
             try:
                 struct.calcsize('<' + inner_types)
             except struct.error as exc:

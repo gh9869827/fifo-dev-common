@@ -120,6 +120,18 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
 
             return FieldSpecCompiledEnum(name, inner_type, ptype)
 
+        if struct_format.startswith("T<"):
+            if not (len(struct_format) >= 4 and struct_format[-1] == ">"):
+                raise ValueError("Struct format for tuple type invalid")
+            inner_types = struct_format[2:-1]
+            if len(inner_types) == 0:
+                raise ValueError("Struct format for tuple type invalid")
+            try:
+                struct.calcsize('<' + inner_types)
+            except struct.error as exc:
+                raise ValueError("Struct format for tuple type invalid") from exc
+            return FieldSpecCompiledTuple(name, inner_types)
+
         return FieldSpecCompiledBasic(name, struct_format)
 
     if ptype is not None:
@@ -557,6 +569,22 @@ class FieldSpecCompiledArray(FieldSpecCompiledBasic):
                 The total byte size needed to serialize the array field.
         """
         return 4 + len(getattr(class_obj, self.name)) * self._struct_format_byte_length
+
+
+class FieldSpecCompiledTuple(FieldSpecCompiledBasic):
+    """FieldSpecCompiled subclass for fixed-size tuples of basic types."""
+
+    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        values = getattr(class_obj, self.name)
+        struct.pack_into('<' + self.struct_format, buffer, idx, *values)
+        return idx + self._struct_format_byte_length
+
+    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        obj = struct.unpack_from('<' + self.struct_format, buffer, idx)
+        return obj, idx + self._struct_format_byte_length
+
+    def serialized_byte_size(self, class_obj: Any) -> int:
+        return self._struct_format_byte_length
 
 
 class FieldSpecCompiledGeneric(FieldSpecCompiled):

@@ -121,6 +121,45 @@ def test_array():
 
 @serializable
 @dataclass
+class TestTupleInt(FifoSerializable):
+    pair: tuple[int, int] = field(metadata={"format": "T<II>"})
+
+
+@serializable
+@dataclass
+class TestTupleMixed(FifoSerializable):
+    pair: tuple[int, float] = field(metadata={"format": "T<If>"})
+
+
+def test_tuple_basic():
+    obj = TestTupleInt((7, 9))
+
+    size = obj.serialized_byte_size()
+    assert size == 8
+
+    buf = bytearray(size)
+    obj.serialize_to_bytes(buf, 0)
+
+    restored, _ = TestTupleInt.deserialize_from_bytes(buf, 0)
+    assert restored.pair == (7, 9)
+
+
+def test_tuple_mixed():
+    obj = TestTupleMixed((42, 3.5))
+
+    size = obj.serialized_byte_size()
+    assert size == 8
+
+    buf = bytearray(size)
+    obj.serialize_to_bytes(buf, 0)
+
+    restored, _ = TestTupleMixed.deserialize_from_bytes(buf, 0)
+    assert restored.pair[0] == 42
+    assert math.isclose(restored.pair[1], 3.5, rel_tol=1e-6, abs_tol=1e-8)
+
+
+@serializable
+@dataclass
 class TestSuperCombo(FifoSerializable):
     arr: TestArray                = field(metadata={ "ptype": TestArray })
     opt: TestOptional             = field(metadata={ "ptype": TestOptional })
@@ -207,6 +246,10 @@ def test_super_combo():
     ("E<_>",  None, "Struct only support I format for now"),
     ("E<i>",  None, "Struct only support I format for now"),
     ("E<I>",  None, "Type must be provided for Struct"),
+
+    ("T<",   None, "Struct format for tuple type invalid"),
+    ("T<>",  None, "Struct format for tuple type invalid"),
+    ("T<__>", None, "Struct format for tuple type invalid"),
 
     (None,  None, "Type or Struct format must be provided"),
 ])

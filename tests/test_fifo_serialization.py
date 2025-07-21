@@ -160,6 +160,28 @@ def test_tuple_mixed():
 
 @serializable
 @dataclass
+class TestOptionalArray(FifoSerializable):
+    items: list[TestBasic | None] = field(metadata={"format": "[?_]", "ptype": TestBasic})
+
+
+def test_optional_array():
+    arr = [TestBasic(1, 2), None, TestBasic(3, 4)]
+    obj = TestOptionalArray(arr)
+
+    size = obj.serialized_byte_size()
+    expected = 4 + ((len(arr) + 7) // 8) + 2 * TestBasic(0, 0).serialized_byte_size()
+    assert size == expected
+
+    buf = bytearray(size)
+    obj.serialize_to_bytes(buf, 0)
+
+    restored, _ = TestOptionalArray.deserialize_from_bytes(buf, 0)
+    assert restored.items[1] is None
+    assert restored.items[0].a == 1 and restored.items[2].b == 4
+
+
+@serializable
+@dataclass
 class TestSuperCombo(FifoSerializable):
     arr: TestArray                = field(metadata={ "ptype": TestArray })
     opt: TestOptional             = field(metadata={ "ptype": TestOptional })
@@ -236,6 +258,7 @@ def test_super_combo():
     ("[__", None, "Struct format for array type invalid"),
     ("[",   None, "Struct format for array type invalid"),
     ("[_]", None, "Type must be provided for generic array"),
+    ("[?_]", None, "Type must be provided for optional array"),
 
     ("?",   None, "Struct format for optional type invalid"),
     ("?__", None, "Struct format for optional type invalid"),

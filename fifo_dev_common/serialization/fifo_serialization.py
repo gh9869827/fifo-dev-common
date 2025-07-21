@@ -56,6 +56,11 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
           - '[_]' indicates a variable-length array of nested objects.
             Requires 'ptype' metadata specifying the element class type.
 
+      - Array of optional nested serializable objects:
+          - '[?_]' indicates a variable-length array where each element may be
+            `None`.
+            Requires 'ptype' metadata specifying the element class type.
+
       - No format specified:
           - Assumes a nested serializable object.
             Requires 'ptype' metadata specifying the class type.
@@ -75,7 +80,7 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
     Raises:
         ValueError:
             - If the 'format' string is invalid for array, optional, or enum types.
-            - If a generic array ('[_]') or optional ('?_') format is specified without a 'ptype'.
+            - If a generic array ('[_]'), optional ('?_'), or optional array ('[?_]') format is specified without a 'ptype'.
             - If an enum format ('E<I>') is used without a 'ptype' Enum class.
             - If neither 'format' nor 'ptype' is provided in the field metadata.
     """
@@ -85,6 +90,11 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
 
     if struct_format is not None:
         if struct_format[0] == "[":
+            if struct_format == "[?_]":
+                if ptype is None:
+                    raise ValueError("Type must be provided for optional array")
+                return FieldSpecCompiledGenericOptionalArray(name, ptype)
+
             if not (len(struct_format) == 3 and struct_format[2] == "]"):
                 raise ValueError("Struct format for array type invalid")
 
@@ -967,6 +977,66 @@ class FieldSpecCompiledGenericOptional(FieldSpecCompiled):
         if obj is None:
             return 1
         return 1 + obj.serialized_byte_size()
+
+
+class FieldSpecCompiledGenericOptionalArray(FieldSpecCompiled):
+    """FieldSpecCompiled subclass for arrays of optional nested serializable objects.
+
+    Each element in the array may be ``None``. Serialization stores a 4-byte
+    length prefix followed by a packed presence bitmap (1 bit per element)
+    and then the serialized data for all present elements in order.
+    """
+
+    ptype: FifoSerializable
+
+    def __init__(self, name: str, ptype: FifoSerializable):
+        super().__init__(name)
+        self.ptype = ptype
+
+    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        array: list[Any | None] = getattr(class_obj, self.name)
+        length = len(array)
+        struct.pack_into("<I", buffer, idx, length)
+        idx += 4
+
+        bitmap_len = (length + 7) // 8
+        bitmap = bytearray(bitmap_len)
+        for i, elem in enumerate(array):
+            if elem is not None:
+                bitmap[i // 8] |= 1 << (i % 8)
+        buffer[idx:idx + bitmap_len] = bitmap
+        idx += bitmap_len
+
+        for elem in array:
+            if elem is not None:
+                idx = elem.serialize_to_bytes(buffer, idx)
+
+        return idx
+
+    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+        length, = struct.unpack_from("<I", buffer, idx)
+        idx += 4
+
+        bitmap_len = (length + 7) // 8
+        bitmap = buffer[idx:idx + bitmap_len]
+        idx += bitmap_len
+
+        items: list[Any | None] = []
+        for i in range(length):
+            if bitmap[i // 8] & (1 << (i % 8)):
+                item, idx = self.ptype.deserialize_from_bytes(buffer, idx)
+                items.append(item)
+            else:
+                items.append(None)
+        return items, idx
+
+    def serialized_byte_size(self, class_obj: Any) -> int:
+        array: list[Any | None] = getattr(class_obj, self.name)
+        total = 4 + (len(array) + 7) // 8
+        for elem in array:
+            if elem is not None:
+                total += elem.serialized_byte_size()
+        return total
 
 
 C = TypeVar('C', bound=type)

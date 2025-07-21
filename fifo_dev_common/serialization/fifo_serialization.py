@@ -8,15 +8,15 @@ from typing import Any, Self, Tuple, Type, TypeVar
 import numpy as np
 from numpy.typing import NDArray
 
-_NUMPY_DTYPES: dict[str, np.dtype] = {
-    "u8": np.uint8,
-    "u16": np.uint16,
-    "u32": np.uint32,
-    "i8": np.int8,
-    "i16": np.int16,
-    "i32": np.int32,
-    "f32": np.float32,
-    "f64": np.float64,
+_NUMPY_DTYPES: dict[str, np.dtype[Any]] = {
+    "u8": np.dtype(np.uint8),
+    "u16": np.dtype(np.uint16),
+    "u32": np.dtype(np.uint32),
+    "i8": np.dtype(np.int8),
+    "i16": np.dtype(np.int16),
+    "i32": np.dtype(np.int32),
+    "f32": np.dtype(np.float32),
+    "f64": np.dtype(np.float64),
 }
 
 def compile_field(field: Field[Any]) -> FieldSpecCompiled:
@@ -598,16 +598,60 @@ class FieldSpecCompiledArray(FieldSpecCompiledBasic):
 
 
 class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
-    """FieldSpecCompiled subclass for variable-size NumPy arrays."""
+    """
+    FieldSpecCompiled subclass for variable-size NumPy arrays of a fixed dtype.
 
-    dtype: np.dtype
+    Serializes the array as:
+        - 1 byte: number of dimensions (ndim, unsigned)
+        - 4 * ndim bytes: each dimension size as a 4-byte unsigned int (little-endian)
+        - N bytes: array data as a contiguous bytes buffer (row-major/C order)
 
-    def __init__(self, name: str, dtype: np.dtype):
+    Only arrays with the exact dtype as specified at construction are supported.
+    Raises ValueError on dtype mismatch.
+
+    Attributes:
+        dtype (np.dtype[Any]):
+            The required NumPy dtype of the array (e.g., np.uint8, np.float32).
+    """
+
+    dtype: np.dtype[Any]
+
+    def __init__(self, name: str, dtype: np.dtype[Any]):
+        """
+        Initialize the field for a variable-size NumPy array.
+
+        Args:
+            name (str):
+                The name of the field.
+
+            dtype (np.dtype[Any]):
+                The NumPy dtype of the array.
+        """
         super().__init__(name)
         self.dtype = np.dtype(dtype)
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
-        arr: NDArray = getattr(class_obj, self.name)
+        """
+        Serialize the NumPy array field from `class_obj` into the buffer at `idx`.
+
+        Args:
+            class_obj (Any):
+                The instance containing the array field.
+
+            buffer (bytearray):
+                The buffer into which to serialize data.
+
+            idx (int):
+                The starting index in the buffer to write data.
+
+        Returns:
+            int:
+                The updated buffer index after writing.
+
+        Raises:
+            ValueError: If the array's dtype does not match the required dtype.
+        """
+        arr: NDArray[Any] = getattr(class_obj, self.name)
         if arr.dtype != self.dtype:
             raise ValueError("NDArray dtype mismatch")
         ndim = arr.ndim
@@ -620,6 +664,21 @@ class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
         return idx + len(data)
 
     def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        """
+        Deserialize a NumPy array field from the buffer at `idx`.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in the buffer to read data.
+
+        Returns:
+            Tuple[NDArray, int]:
+                - The deserialized NumPy array.
+                - The updated buffer index after reading.
+        """
         ndim = struct.unpack_from("<B", buffer, idx)[0]
         idx += 1
         shape = struct.unpack_from("<" + "I" * ndim, buffer, idx)
@@ -629,12 +688,23 @@ class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
             count *= dim
         byte_len = count * self.dtype.itemsize
         arr = np.frombuffer(buffer, dtype=self.dtype, count=count, offset=idx).reshape(shape)
-        arr = arr.copy()
+        arr = arr.copy()  # Defensive copy (frombuffer is always read-only)
         idx += byte_len
         return arr, idx
 
     def serialized_byte_size(self, class_obj: Any) -> int:
-        arr: NDArray = getattr(class_obj, self.name)
+        """
+        Compute the total number of bytes required to serialize the NumPy array field.
+
+        Args:
+            class_obj (Any):
+                The instance containing the array field.
+
+        Returns:
+            int:
+                The total byte size for serialization.
+        """
+        arr: NDArray[Any] = getattr(class_obj, self.name)
         return 1 + 4 * arr.ndim + arr.nbytes
 
 

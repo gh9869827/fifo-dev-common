@@ -2,11 +2,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import IntEnum
 from types import SimpleNamespace
-from typing import Any, Type
+from typing import Any, Type, cast
 import pytest
 import math
 import struct
 import numpy as np
+from numpy.typing import NDArray
 from fifo_dev_common.serialization.fifo_serialization import FifoSerializable, serializable, compile_field
 
 
@@ -322,22 +323,22 @@ def test_other_non_serializable_fields():
 @serializable
 @dataclass
 class TestNumpy1D(FifoSerializable):
-    arr: np.ndarray = field(metadata={"format": "[np:u8]"})
+    arr: NDArray[np.uint8] = field(metadata={"format": "[np:u8]"})
 
 
 @serializable
 @dataclass
 class TestNumpy2D(FifoSerializable):
-    arr: np.ndarray = field(metadata={"format": "[np:f32]"})
+    arr: NDArray[np.float32] = field(metadata={"format": "[np:f32]"})
 
 
 @serializable
 @dataclass
 class TestNumpy3D(FifoSerializable):
-    arr: np.ndarray = field(metadata={"format": "[np:i16]"})
+    arr: NDArray[np.int16] = field(metadata={"format": "[np:i16]"})
 
 
-def test_numpy_arrays_roundtrip():
+def test_numpy_arrays_roundtrip() -> None:
     a1 = np.arange(10, dtype=np.uint8)
     a2 = np.arange(6, dtype=np.float32).reshape(2, 3)
     a3 = np.arange(24, dtype=np.int16).reshape(2, 3, 4)
@@ -346,13 +347,16 @@ def test_numpy_arrays_roundtrip():
     o2 = TestNumpy2D(a2)
     o3 = TestNumpy3D(a3)
 
-    for obj, arr, cls in [
+    lst: list[tuple[FifoSerializable, NDArray[Any], Type[FifoSerializable]]] = [
         (o1, a1, TestNumpy1D),
         (o2, a2, TestNumpy2D),
         (o3, a3, TestNumpy3D),
-    ]:
+    ]
+
+    for obj, arr, cls in lst:
         buf = bytearray(obj.serialized_byte_size())
         obj.serialize_to_bytes(buf, 0)
         restored, _ = cls.deserialize_from_bytes(buf, 0)
-        assert np.array_equal(restored.arr, arr)
-        assert restored.arr.dtype == arr.dtype
+        restored_arr = cast(NDArray[Any], restored.arr) # type: ignore
+        assert np.array_equal(restored_arr, arr)
+        assert restored_arr.dtype == arr.dtype

@@ -131,6 +131,7 @@ Provides a lightweight, efficient binary serialization framework for Python data
 | `?I`          | Optional unsigned int (presence flag + value) | 1 byte presence flag (0/1) + 4-byte uint if present | `field(metadata={"format": "?I"})`        |
 | `?_`          | Optional nested serializable object (`_` is literal) | 1 byte presence flag + serialized nested object if present | `field(metadata={"format": "?_", "ptype": MyClass})` |
 | `[_]`         | Array of nested serializable objects (`_` is literal) | 4-byte length prefix + serialized nested objects in sequence | `field(metadata={"format": "[_]", "ptype": MyClass})` |
+| `[?_]`        | Array of optional nested objects (`_` is literal) | 4-byte length + presence bitmap + serialized present objects | `field(metadata={"format": "[?_]", "ptype": MyClass})` |
 | `E<I>`        | Enum stored as unsigned 4-byte int (only `I` supported) | 4-byte uint representing the Enum value          | `field(metadata={"format": "E<I>", "ptype": MyEnum})` |
 | `T<x>`        | Fixed-length tuple of basic types            | Raw binary data for each tuple element           | `field(metadata={"format": "T<If>"})` |
 
@@ -307,6 +308,20 @@ deserialized, _ = SensorArray.deserialize_from_bytes(buffer, 0)
 assert len(deserialized.readings) == 2
 assert abs(deserialized.readings[0].temperature - 22.5) < 1e-6
 assert abs(deserialized.readings[1].humidity - 38.5) < 1e-6
+```
+
+```python
+@serializable
+@dataclass
+class MaybeSensorArray(FifoSerializable):
+    readings: List[SensorReadings | None] = field(metadata={"format": "[?_]", "ptype": SensorReadings})
+
+data = MaybeSensorArray(readings=[s1, None])
+buf = bytearray(data.serialized_byte_size())
+data.serialize_to_bytes(buf, 0)
+restored, _ = MaybeSensorArray.deserialize_from_bytes(buf, 0)
+assert restored.readings[0] is not None
+assert restored.readings[1] is None
 ```
 
 

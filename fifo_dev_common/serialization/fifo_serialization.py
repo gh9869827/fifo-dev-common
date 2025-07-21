@@ -572,18 +572,85 @@ class FieldSpecCompiledArray(FieldSpecCompiledBasic):
 
 
 class FieldSpecCompiledTuple(FieldSpecCompiledBasic):
-    """FieldSpecCompiled subclass for fixed-size tuples of basic types."""
+    """
+    FieldSpecCompiled subclass for fixed-size tuples of basic struct types.
+
+    Serializes and deserializes a tuple field as a tightly packed sequence
+    of fixed-size elements, according to the specified struct format string.
+
+    The number and types of elements in the tuple are determined by the struct format,
+    e.g. 'II' for (int, int) or 'If' for (int, float).
+    """
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize the tuple field from `class_obj` into the buffer starting at `idx`.
+
+        Writes the tuple elements in order using the struct format and little-endian encoding.
+        No length prefix is included, as the size and structure are fixed by the format.
+
+        Args:
+            class_obj (Any):
+                The instance containing the tuple field.
+
+            buffer (bytearray):
+                The buffer into which to serialize data.
+
+            idx (int):
+                The starting index in the buffer to write data.
+
+        Returns:
+            int:
+                The updated buffer index after writing the tuple data.
+
+        Raises:
+            Implementation-specific exceptions if serialization fails,
+            such as a mismatch in tuple length or type.
+        """
         values = getattr(class_obj, self.name)
         struct.pack_into('<' + self.struct_format, buffer, idx, *values)
         return idx + self._struct_format_byte_length
 
     def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        """
+        Deserialize the tuple field from the buffer starting at `idx`.
+
+        Reads a fixed number of elements according to the struct format,
+        returning them as a tuple.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in the buffer to read data.
+
+        Returns:
+            Tuple[Any, int]:
+                - The deserialized tuple of values.
+                - The updated buffer index after reading the tuple.
+
+        Raises:
+            Implementation-specific exceptions if deserialization fails,
+            such as if not enough data is available in the buffer.
+        """
         obj = struct.unpack_from('<' + self.struct_format, buffer, idx)
         return obj, idx + self._struct_format_byte_length
 
     def serialized_byte_size(self, class_obj: Any) -> int:
+        """
+        Compute the number of bytes required to serialize the tuple field.
+
+        The size is fixed and determined entirely by the struct format string.
+
+        Args:
+            class_obj (Any):
+                The instance containing the tuple field.
+
+        Returns:
+            int:
+                The total byte size needed to serialize the tuple.
+        """
         return self._struct_format_byte_length
 
 

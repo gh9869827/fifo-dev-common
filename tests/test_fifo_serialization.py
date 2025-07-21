@@ -218,3 +218,30 @@ def test_compile_field_value_errors(format_string: str | None, ptype: Type[Any] 
     mock_field = SimpleNamespace(name="x", metadata=metadata, ptype=ptype)
     with pytest.raises(ValueError, match=err_msg):
         compile_field(mock_field)  # type: ignore[arg-type]
+
+
+@serializable
+@dataclass(kw_only=True)
+class TestOtherNonSerializableFields(FifoSerializable):
+    d: int = 0
+    a: int = field(metadata={"format": "I"})
+    b: int = field(metadata={"format": "I"})
+    c: int = 0
+
+def test_other_non_serializable_fields():
+    test = TestOtherNonSerializableFields(d=4, a=42, b=51, c=2)
+
+    byte_size = test.serialized_byte_size()
+
+    assert byte_size == 8
+
+    buffer = bytearray(byte_size)
+
+    test.serialize_to_bytes(buffer, 0)
+
+    deserialized_test, _ = TestOtherNonSerializableFields.deserialize_from_bytes(buffer, 0)
+
+    assert deserialized_test.d == 0
+    assert deserialized_test.a == 42
+    assert deserialized_test.b == 51
+    assert deserialized_test.c == 0

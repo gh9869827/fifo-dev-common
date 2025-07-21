@@ -960,7 +960,10 @@ def serializable(cls: C) -> C:
     """
     compiled_fields: list[FieldSpecCompiled] = []
     for f in fields(cls):
-        compiled_fields.append(compile_field(f))
+        # Only serialize fields with 'format' or 'ptype' in metadata
+        meta = getattr(f, "metadata", None)
+        if meta and ("format" in meta or "ptype" in meta):
+            compiled_fields.append(compile_field(f))
 
     setattr(cls, "_fifo_compiled_fields", compiled_fields)
 

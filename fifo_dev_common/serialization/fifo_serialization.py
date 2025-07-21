@@ -40,6 +40,13 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
             Requires 'ptype' metadata specifying the Enum class.
             For now, support only type 'I'
 
+      - Fixed-size tuple of basic types:
+          - 'T<xy...>' where x, y, ... are struct format characters.
+            Example: 'T<II>' means a tuple of two ints, 'T<If>' means a tuple of (int, float).
+            The tuple is serialized as a tightly packed binary sequence of those types.
+            Only basic types are supported inside the tuple. Nested tuples, arrays, or optional
+            values are not supported in the current version.
+
       - Fixed-length array of basic types:
           - '[x]' where x is a single struct format character.
             Example: '[f]' means a variable-length array of floats.
@@ -236,9 +243,6 @@ class FieldSpecCompiled(ABC):
             int:
                 The byte size needed for serialization of this field.
         """
-
-
-
 
 
 class FieldSpecCompiledBasic(FieldSpecCompiled):
@@ -980,20 +984,66 @@ class FieldSpecCompiledGenericOptional(FieldSpecCompiled):
 
 
 class FieldSpecCompiledGenericOptionalArray(FieldSpecCompiled):
-    """FieldSpecCompiled subclass for arrays of optional nested serializable objects.
+    """
+    FieldSpecCompiled subclass for arrays of optional nested serializable objects.
 
-    Each element in the array may be ``None``. Serialization stores a 4-byte
-    length prefix followed by a packed presence bitmap (1 bit per element)
-    and then the serialized data for all present elements in order.
+    Supports serializing and deserializing fields where each element is either an instance of a
+    serializable class or None. Serialization is efficient and compact, encoding presence with a
+    bitmask.
+
+    Features:
+        - Serializes array length as a 4-byte unsigned int.
+        - Serializes a packed presence bitmap (1 bit per element) directly after the length.
+        - Serializes only present elements in order (no data for None elements).
+        - Handles arbitrary array lengths and supports efficient deserialization.
+
+    Args:
+        ptype (FifoSerializable):
+            The serializable element type for array elements.
     """
 
     ptype: FifoSerializable
 
     def __init__(self, name: str, ptype: FifoSerializable):
+        """
+        Initialize with field name and nested serializable type for the array.
+
+        Args:
+            name (str):
+                The name of the array field.
+
+            ptype (FifoSerializable):
+                The serializable element type for array elements.
+        """
         super().__init__(name)
         self.ptype = ptype
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize the array of optional nested serializable objects.
+
+        Writes the following to the buffer, starting at the given index:
+            - 4 bytes: array length (unsigned int, little-endian)
+            - N bits (packed into bytes): presence bitmap (1 if element is present, 0 if None)
+            - Serialized payloads of present elements, in order.
+
+        Args:
+            class_obj (Any):
+                The instance containing the array field.
+
+            buffer (bytearray):
+                The buffer into which to serialize data.
+
+            idx (int):
+                The starting index in the buffer to write data.
+
+        Returns:
+            int:
+                The updated buffer index after writing the entire array.
+
+        Raises:
+            Implementation-specific exceptions if serialization fails.
+        """
         array: list[Any | None] = getattr(class_obj, self.name)
         length = len(array)
         struct.pack_into("<I", buffer, idx, length)
@@ -1014,6 +1064,29 @@ class FieldSpecCompiledGenericOptionalArray(FieldSpecCompiled):
         return idx
 
     def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+        """
+        Deserialize an array of optional nested serializable objects from a buffer.
+
+        Reads:
+            - 4 bytes: array length (unsigned int, little-endian)
+            - N bits (packed into bytes): presence bitmap (1 if element is present, 0 if None)
+            - Serialized payloads of present elements, in order.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in the buffer to read data.
+
+        Returns:
+            tuple[list[Any | None], int]:
+                - The deserialized list of elements (either instances or None).
+                - The updated buffer index after reading the entire array.
+
+        Raises:
+            Implementation-specific exceptions if deserialization fails.
+        """
         length, = struct.unpack_from("<I", buffer, idx)
         idx += 4
 
@@ -1031,6 +1104,22 @@ class FieldSpecCompiledGenericOptionalArray(FieldSpecCompiled):
         return items, idx
 
     def serialized_byte_size(self, class_obj: Any) -> int:
+        """
+        Compute the total number of bytes required to serialize the array field.
+
+        Includes:
+            - 4 bytes for the array length prefix
+            - N bits (rounded up to bytes) for the presence bitmap
+            - Only the size of present (non-None) elements
+
+        Args:
+            class_obj (Any):
+                The instance containing the array field.
+
+        Returns:
+            int:
+                The total number of bytes needed to serialize the field.
+        """
         array: list[Any | None] = getattr(class_obj, self.name)
         total = 4 + (len(array) + 7) // 8
         for elem in array:

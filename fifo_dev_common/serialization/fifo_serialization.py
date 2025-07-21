@@ -5,6 +5,19 @@ from dataclasses import Field, fields
 from enum import Enum
 import struct
 from typing import Any, Self, Tuple, Type, TypeVar
+import numpy as np
+from numpy.typing import NDArray
+
+_NUMPY_DTYPES: dict[str, np.dtype] = {
+    "u8": np.uint8,
+    "u16": np.uint16,
+    "u32": np.uint32,
+    "i8": np.int8,
+    "i16": np.int16,
+    "i32": np.int32,
+    "f32": np.float32,
+    "f64": np.float64,
+}
 
 def compile_field(field: Field[Any]) -> FieldSpecCompiled:
     """
@@ -36,6 +49,11 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
       - Fixed-length array of basic types:
           - '[x]' where x is a single struct format character.
             Example: '[f]' means a variable-length array of floats.
+
+      - NumPy arrays of fixed dtype:
+          - '[np:x]' where x is one of 'u8', 'u16', 'u32', 'i8', 'i16', 'i32',
+            'f32', 'f64'. The dtype must be fixed for the field.
+            Supports arrays of arbitrary dimension.
 
       - Optional values (nullable) of basic types:
           - '?x' where x is a single struct format character.
@@ -83,6 +101,15 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
 
     if struct_format is not None:
         if struct_format[0] == "[":
+            if struct_format.startswith("[np:"):
+                if not struct_format.endswith("]"):
+                    raise ValueError("Struct format for numpy array type invalid")
+                dtype_key = struct_format[4:-1]
+                dtype = _NUMPY_DTYPES.get(dtype_key)
+                if dtype is None:
+                    raise ValueError("Unsupported numpy dtype")
+                return FieldSpecCompiledNumpyArray(name, dtype)
+
             if struct_format == "[?_]":
                 if ptype is None:
                     raise ValueError("Type must be provided for optional array")
@@ -568,6 +595,47 @@ class FieldSpecCompiledArray(FieldSpecCompiledBasic):
                 The total byte size needed to serialize the array field.
         """
         return 4 + len(getattr(class_obj, self.name)) * self._struct_format_byte_length
+
+
+class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
+    """FieldSpecCompiled subclass for variable-size NumPy arrays."""
+
+    dtype: np.dtype
+
+    def __init__(self, name: str, dtype: np.dtype):
+        super().__init__(name)
+        self.dtype = np.dtype(dtype)
+
+    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        arr: NDArray = getattr(class_obj, self.name)
+        if arr.dtype != self.dtype:
+            raise ValueError("NDArray dtype mismatch")
+        ndim = arr.ndim
+        struct.pack_into("<B", buffer, idx, ndim)
+        idx += 1
+        struct.pack_into("<" + "I" * ndim, buffer, idx, *arr.shape)
+        idx += 4 * ndim
+        data = arr.tobytes(order="C")
+        buffer[idx:idx + len(data)] = data
+        return idx + len(data)
+
+    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        ndim = struct.unpack_from("<B", buffer, idx)[0]
+        idx += 1
+        shape = struct.unpack_from("<" + "I" * ndim, buffer, idx)
+        idx += 4 * ndim
+        count = 1
+        for dim in shape:
+            count *= dim
+        byte_len = count * self.dtype.itemsize
+        arr = np.frombuffer(buffer, dtype=self.dtype, count=count, offset=idx).reshape(shape)
+        arr = arr.copy()
+        idx += byte_len
+        return arr, idx
+
+    def serialized_byte_size(self, class_obj: Any) -> int:
+        arr: NDArray = getattr(class_obj, self.name)
+        return 1 + 4 * arr.ndim + arr.nbytes
 
 
 class FieldSpecCompiledTuple(FieldSpecCompiledBasic):

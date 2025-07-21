@@ -115,7 +115,7 @@ These attach structured metadata derived from docstrings—enabling parsing, val
 Provides a lightweight, efficient binary serialization framework for Python dataclasses.
 
 - `@serializable`: Decorator to enable serialization/deserialization on dataclasses.  
-- Supports scalar types, enums, optional fields, and arrays.  
+- Supports scalar types, enums, optional fields, arrays, and fixed-length tuples.
 - Uses dataclass `field` metadata (e.g., `format`, `ptype`) for flexible, extensible field definitions.  
 - Designed for preallocated buffers to maximize performance and minimize allocations.  
 - Works well with microcontroller and embedded system data formats as it is a compact binary format prioritizing direct raw serialization with very little overhead.
@@ -132,8 +132,11 @@ Provides a lightweight, efficient binary serialization framework for Python data
 | `?_`          | Optional nested serializable object (`_` is literal) | 1 byte presence flag + serialized nested object if present | `field(metadata={"format": "?_", "ptype": MyClass})` |
 | `[_]`         | Array of nested serializable objects (`_` is literal) | 4-byte length prefix + serialized nested objects in sequence | `field(metadata={"format": "[_]", "ptype": MyClass})` |
 | `E<I>`        | Enum stored as unsigned 4-byte int (only `I` supported) | 4-byte uint representing the Enum value          | `field(metadata={"format": "E<I>", "ptype": MyEnum})` |
+| `T<x>`        | Fixed-length tuple of basic types            | Raw binary data for each tuple element           | `field(metadata={"format": "T<If>"})` |
 
 **Note:** Standard [Python `struct` format characters](https://docs.python.org/3/library/struct.html#format-characters) are supported for scalar types, such as `B`, `b`, `H`, `h`, `I`, `i`, `Q`, `q`, `f`, and `d`.
+
+Tuples encode elements consecutively with no length prefix or additional metadata.
 
 ---
 

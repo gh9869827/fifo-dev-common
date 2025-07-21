@@ -6,6 +6,7 @@ from typing import Any, Type
 import pytest
 import math
 import struct
+import numpy as np
 from fifo_dev_common.serialization.fifo_serialization import FifoSerializable, serializable, compile_field
 
 
@@ -277,6 +278,8 @@ def test_super_combo():
     ("T<>",  None, "Struct format for tuple type invalid"),
     ("T<__>", None, "Struct format for tuple type invalid"),
 
+    ("[np:bad]", None, "Unsupported numpy dtype"),
+
     (None,  None, "Type or Struct format must be provided"),
 ])
 def test_compile_field_value_errors(format_string: str | None, ptype: Type[Any] | None, err_msg: str):
@@ -314,3 +317,42 @@ def test_other_non_serializable_fields():
     assert deserialized_test.a == 42
     assert deserialized_test.b == 51
     assert deserialized_test.c == 0
+
+
+@serializable
+@dataclass
+class TestNumpy1D(FifoSerializable):
+    arr: np.ndarray = field(metadata={"format": "[np:u8]"})
+
+
+@serializable
+@dataclass
+class TestNumpy2D(FifoSerializable):
+    arr: np.ndarray = field(metadata={"format": "[np:f32]"})
+
+
+@serializable
+@dataclass
+class TestNumpy3D(FifoSerializable):
+    arr: np.ndarray = field(metadata={"format": "[np:i16]"})
+
+
+def test_numpy_arrays_roundtrip():
+    a1 = np.arange(10, dtype=np.uint8)
+    a2 = np.arange(6, dtype=np.float32).reshape(2, 3)
+    a3 = np.arange(24, dtype=np.int16).reshape(2, 3, 4)
+
+    o1 = TestNumpy1D(a1)
+    o2 = TestNumpy2D(a2)
+    o3 = TestNumpy3D(a3)
+
+    for obj, arr, cls in [
+        (o1, a1, TestNumpy1D),
+        (o2, a2, TestNumpy2D),
+        (o3, a3, TestNumpy3D),
+    ]:
+        buf = bytearray(obj.serialized_byte_size())
+        obj.serialize_to_bytes(buf, 0)
+        restored, _ = cls.deserialize_from_bytes(buf, 0)
+        assert np.array_equal(restored.arr, arr)
+        assert restored.arr.dtype == arr.dtype

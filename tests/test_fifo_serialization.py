@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, Type
 import pytest
 import math
+import struct
 from fifo_dev_common.serialization.fifo_serialization import FifoSerializable, serializable, compile_field
 
 
@@ -21,24 +22,25 @@ class TestEnum(IntEnum):
     A = 1
     B = 2
 
-@serializable
-@dataclass
-class TestSerializeEnum(FifoSerializable):
-    a: TestEnum = field(metadata={"format": "E<I>", "ptype": TestEnum})
-    b: TestEnum = field(metadata={"format": "E<I>", "ptype": TestEnum})
+@pytest.mark.parametrize("fmt", ["E<b>", "E<B>", "E<h>", "E<H>", "E<i>", "E<I>"])
+def test_serialize_enum(fmt: str):
+    @serializable
+    @dataclass
+    class _TestSerializeEnum(FifoSerializable):
+        a: TestEnum = field(metadata={"format": fmt, "ptype": TestEnum})
+        b: TestEnum = field(metadata={"format": fmt, "ptype": TestEnum})
 
-def test_serialize_enum():
-    test = TestSerializeEnum(TestEnum.A, TestEnum.B)
+    test = _TestSerializeEnum(TestEnum.A, TestEnum.B)
 
     byte_size = test.serialized_byte_size()
-
-    assert byte_size == 8
+    expected_size = 2 * struct.calcsize('<' + fmt[2])
+    assert byte_size == expected_size
 
     buffer = bytearray(byte_size)
 
     test.serialize_to_bytes(buffer, 0)
 
-    deserialized_test, _ = TestSerializeEnum.deserialize_from_bytes(buffer, 0)
+    deserialized_test, _ = _TestSerializeEnum.deserialize_from_bytes(buffer, 0)
 
     assert type(deserialized_test.a) == TestEnum
     assert type(deserialized_test.b) == TestEnum
@@ -267,8 +269,8 @@ def test_super_combo():
 
     ("E<",  None, "Struct format for enum type invalid"),
     ("E<>",  None, "Struct format for enum type invalid"),
-    ("E<_>",  None, "Struct only support I format for now"),
-    ("E<i>",  None, "Struct only support I format for now"),
+    ("E<_>",  None, "Struct only supports integer formats bBhHiI"),
+    ("E<d>",  None, "Struct only supports integer formats bBhHiI"),
     ("E<I>",  None, "Type must be provided for Struct"),
 
     ("T<",   None, "Struct format for tuple type invalid"),

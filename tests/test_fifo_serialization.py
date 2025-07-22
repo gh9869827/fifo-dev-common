@@ -279,6 +279,10 @@ def test_super_combo():
     ("T<>",  None, "Struct format for tuple type invalid"),
     ("T<__>", None, "Struct format for tuple type invalid"),
 
+    ("S[", None, "Struct format for string type invalid"),
+    ("S[]", None, "Struct format for string type invalid"),
+    ("S[a]", None, "Struct format for string type invalid"),
+
     ("[np:bad]", None, "Unsupported numpy dtype"),
 
     (None,  None, "Type or Struct format must be provided"),
@@ -360,3 +364,38 @@ def test_numpy_arrays_roundtrip() -> None:
         restored_arr = cast(NDArray[Any], restored.arr) # type: ignore
         assert np.array_equal(restored_arr, arr)
         assert restored_arr.dtype == arr.dtype
+
+
+@serializable
+@dataclass
+class TestStringVar(FifoSerializable):
+    name: str = field(metadata={"format": "S"})
+
+
+@serializable
+@dataclass
+class TestStringFixed(FifoSerializable):
+    tag: str = field(metadata={"format": "S[8]"})
+
+
+def test_string_variable_roundtrip() -> None:
+    obj = TestStringVar("hello\u03c0")
+    buf = bytearray(obj.serialized_byte_size())
+    obj.serialize_to_bytes(buf, 0)
+    restored, _ = TestStringVar.deserialize_from_bytes(buf, 0)
+    assert restored.name == "hello\u03c0"
+
+
+def test_string_fixed_padding_and_truncation() -> None:
+    short = TestStringFixed("hi")
+    buf = bytearray(short.serialized_byte_size())
+    short.serialize_to_bytes(buf, 0)
+    assert buf.decode("utf-8") == "hi" + " " * 6
+    restored, _ = TestStringFixed.deserialize_from_bytes(buf, 0)
+    assert restored.tag == "hi"
+
+    long = TestStringFixed("\u00e9" * 5)
+    buf2 = bytearray(long.serialized_byte_size())
+    long.serialize_to_bytes(buf2, 0)
+    restored2, _ = TestStringFixed.deserialize_from_bytes(buf2, 0)
+    assert restored2.tag == "\u00e9" * 4

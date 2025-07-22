@@ -161,6 +161,17 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                 raise ValueError("Struct format for tuple type invalid") from exc
             return FieldSpecCompiledTuple(name, inner_types)
 
+        if struct_format == "S":
+            return FieldSpecCompiledString(name)
+
+        if struct_format.startswith("S["):
+            if not struct_format.endswith("]"):
+                raise ValueError("Struct format for string type invalid")
+            length_txt = struct_format[2:-1]
+            if not length_txt.isdigit():
+                raise ValueError("Struct format for string type invalid")
+            return FieldSpecCompiledFixedString(name, int(length_txt))
+
         return FieldSpecCompiledBasic(name, struct_format)
 
     if ptype is not None:
@@ -706,6 +717,60 @@ class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
         """
         arr: NDArray[Any] = getattr(class_obj, self.name)
         return 1 + 4 * arr.ndim + arr.nbytes
+
+
+class FieldSpecCompiledString(FieldSpecCompiled):
+    """Variable-length UTF-8 string with length prefix."""
+
+    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        data = getattr(class_obj, self.name).encode("utf-8")
+        struct.pack_into("<I", buffer, idx, len(data))
+        idx += 4
+        buffer[idx:idx + len(data)] = data
+        return idx + len(data)
+
+    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        length = struct.unpack_from("<I", buffer, idx)[0]
+        idx += 4
+        data = bytes(buffer[idx:idx + length])
+        return data.decode("utf-8"), idx + length
+
+    def serialized_byte_size(self, class_obj: Any) -> int:
+        return 4 + len(getattr(class_obj, self.name).encode("utf-8"))
+
+
+class FieldSpecCompiledFixedString(FieldSpecCompiled):
+    """Fixed-length UTF-8 string padded or truncated to a constant size."""
+
+    length: int
+
+    def __init__(self, name: str, length: int):
+        super().__init__(name)
+        self.length = length
+
+    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        data = getattr(class_obj, self.name).encode("utf-8")
+        if len(data) > self.length:
+            trunc = data[: self.length]
+            while True:
+                try:
+                    trunc.decode("utf-8")
+                    data = trunc
+                    break
+                except UnicodeDecodeError as exc:
+                    trunc = trunc[: exc.start]
+        buffer[idx:idx + len(data)] = data
+        if len(data) < self.length:
+            buffer[idx + len(data):idx + self.length] = b" " * (self.length - len(data))
+        return idx + self.length
+
+    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        data = bytes(buffer[idx:idx + self.length])
+        s = data.rstrip(b" ").decode("utf-8")
+        return s, idx + self.length
+
+    def serialized_byte_size(self, class_obj: Any) -> int:
+        return self.length
 
 
 class FieldSpecCompiledTuple(FieldSpecCompiledBasic):

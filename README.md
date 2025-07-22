@@ -133,6 +133,8 @@ Provides a lightweight, efficient binary serialization framework for Python data
 | `?_`          | Optional nested serializable object (`_` is literal) | 1 byte presence flag + serialized nested object if present | `field(metadata={"format": "?_", "ptype": MyClass})` |
 | `[_]`         | Array of nested serializable objects (`_` is literal) | 4-byte length prefix + serialized nested objects in sequence | `field(metadata={"format": "[_]", "ptype": MyClass})` |
 | `[?_]`        | Array of optional nested objects (`_` is literal) | 4-byte length + presence bitmap + serialized present objects | `field(metadata={"format": "[?_]", "ptype": MyClass})` |
+| `S`           | UTF-8 string with length prefix                | 4-byte length prefix + UTF-8 bytes           | `field(metadata={"format": "S"})` |
+| `S[x]`        | Fixed-length UTF-8 string of `x` bytes          | UTF-8 bytes padded/truncated to `x` bytes    | `field(metadata={"format": "S[8]"})` |
 | `E<x>`        | Enum stored as integer type `x` (`b`, `B`, `h`, `H`, `i`, `I`) | Integer representing the Enum value using chosen size | `field(metadata={"format": "E<B>", "ptype": MyEnum})` |
 | `T<x>`        | Fixed-length tuple of basic types            | Raw binary data for each tuple element           | `field(metadata={"format": "T<If>"})` |
 

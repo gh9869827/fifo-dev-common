@@ -221,7 +221,7 @@ class FieldSpecCompiled(ABC):
                 The buffer into which to serialize data.
 
             idx (int):
-                The starting index in the buffer to write data.
+                The starting index in the buffer at which to write data.
 
         Returns:
             int:
@@ -241,7 +241,7 @@ class FieldSpecCompiled(ABC):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             Tuple[Any, int]:
@@ -318,7 +318,7 @@ class FieldSpecCompiledBasic(FieldSpecCompiled):
                 The buffer into which to serialize data.
 
             idx (int):
-                The starting index in the buffer to write data.
+                The starting index in the buffer at which to write data.
 
         Returns:
             int:
@@ -339,7 +339,7 @@ class FieldSpecCompiledBasic(FieldSpecCompiled):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             Tuple[Any, int]:
@@ -416,7 +416,7 @@ class FieldSpecCompiledEnum(FieldSpecCompiledBasic):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             Tuple[Any, int]:
@@ -457,7 +457,7 @@ class FieldSpecCompiledOptional(FieldSpecCompiledBasic):
                 The buffer into which to serialize data.
 
             idx (int):
-                The starting index in the buffer to write data.
+                The starting index in the buffer at which to write data.
 
         Returns:
             int:
@@ -485,7 +485,7 @@ class FieldSpecCompiledOptional(FieldSpecCompiledBasic):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             Tuple[Any, int]:
@@ -549,7 +549,7 @@ class FieldSpecCompiledArray(FieldSpecCompiledBasic):
                 The buffer into which to serialize data.
 
             idx (int):
-                The starting index in the buffer to write data.
+                The starting index in the buffer at which to write data.
 
         Returns:
             int:
@@ -577,7 +577,7 @@ class FieldSpecCompiledArray(FieldSpecCompiledBasic):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             Tuple[Any, int]:
@@ -653,7 +653,7 @@ class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
                 The buffer into which to serialize data.
 
             idx (int):
-                The starting index in the buffer to write data.
+                The starting index in the buffer at which to write data.
 
         Returns:
             int:
@@ -683,7 +683,7 @@ class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             Tuple[NDArray, int]:
@@ -720,9 +720,41 @@ class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
 
 
 class FieldSpecCompiledString(FieldSpecCompiled):
-    """Variable-length UTF-8 string with length prefix."""
+    """
+    FieldSpecCompiled subclass for variable-length UTF-8 strings.
+
+    Serializes the string by first writing its length as a 4-byte unsigned integer (little-endian),
+    followed by the UTF-8 encoded bytes.
+
+    On deserialization, reads the length prefix and decodes the following bytes as a UTF-8 string.
+
+    Raises UnicodeDecodeError on invalid UTF-8 sequences.
+    """
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize the UTF-8 string field from `class_obj` into the buffer at `idx`.
+
+        Writes the string length (4 bytes, little-endian unsigned int),
+        followed by the UTF-8 encoded bytes.
+
+        Args:
+            class_obj (Any):
+                The instance containing the string field.
+
+            buffer (bytearray):
+                The buffer into which to serialize data.
+
+            idx (int):
+                The starting index in the buffer at which to write data.
+
+        Returns:
+            int:
+                The updated buffer index after writing the length and string bytes.
+
+        Raises:
+            UnicodeEncodeError: If the string cannot be encoded as UTF-8.
+        """
         data = getattr(class_obj, self.name).encode("utf-8")
         struct.pack_into("<I", buffer, idx, len(data))
         idx += 4
@@ -730,25 +762,111 @@ class FieldSpecCompiledString(FieldSpecCompiled):
         return idx + len(data)
 
     def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        """
+        Deserialize the UTF-8 string field from the buffer at `idx`.
+
+        Reads the string length (4 bytes, little-endian unsigned int),
+        then reads and decodes that many bytes as UTF-8.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in the buffer at which to read data.
+
+        Returns:
+            Tuple[str, int]:
+                - The deserialized string.
+                - The updated buffer index after reading the string.
+
+        Raises:
+            UnicodeDecodeError: If the bytes cannot be decoded as UTF-8.
+        """
         length = struct.unpack_from("<I", buffer, idx)[0]
         idx += 4
         data = bytes(buffer[idx:idx + length])
         return data.decode("utf-8"), idx + length
 
     def serialized_byte_size(self, class_obj: Any) -> int:
+        """
+        Compute the number of bytes required to serialize the UTF-8 string field,
+        including 4 bytes for the length prefix plus the encoded string bytes.
+
+        Args:
+            class_obj (Any):
+                The instance containing the string field.
+
+        Returns:
+            int:
+                The total byte size needed to serialize the string field.
+        """
         return 4 + len(getattr(class_obj, self.name).encode("utf-8"))
 
 
 class FieldSpecCompiledFixedString(FieldSpecCompiled):
-    """Fixed-length UTF-8 string padded or truncated to a constant size."""
+    """
+    FieldSpecCompiled subclass for fixed-length UTF-8 strings.
+
+    Serializes the string to exactly `length` bytes:
+      - If the UTF-8 encoded string is shorter than `length`, pads with ASCII spaces (' ').
+      - If the encoded string is longer than `length`, truncates so the UTF-8 sequence fits,
+        never splitting a multi-byte Unicode codepoint.
+
+    On deserialization, reads exactly `length` bytes, strips trailing ASCII spaces,
+    and decodes as UTF-8. Raises UnicodeDecodeError on invalid UTF-8 sequences.
+
+    Note:
+        Any trailing ASCII spaces in the original string will **not** be preserved;
+        all trailing spaces (whether from padding or the original string) are removed
+        during deserialization.
+
+    Attributes:
+        length (int):
+            The fixed number of bytes used to store the string (after encoding).
+    """
 
     length: int
 
     def __init__(self, name: str, length: int):
+        """
+        Initialize the field for a fixed-length UTF-8 string.
+
+        Args:
+            name (str):
+                The name of the field.
+
+            length (int):
+                The fixed number of bytes to allocate for the UTF-8 encoded string.
+        """
         super().__init__(name)
         self.length = length
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize the fixed-length UTF-8 string field from `class_obj` into the buffer at `idx`.
+
+        Encodes the string as UTF-8, truncating or padding with spaces as needed
+        to ensure the output is exactly `self.length` bytes.
+        Truncation never splits multi-byte codepoints.
+
+        Args:
+            class_obj (Any):
+                The instance containing the string field.
+
+            buffer (bytearray):
+                The buffer into which to serialize data.
+
+            idx (int):
+                The starting index in the buffer at which to write data.
+
+        Returns:
+            int:
+                The updated buffer index after writing the fixed-length string.
+
+        Raises:
+            UnicodeEncodeError: If the string cannot be encoded as UTF-8.
+        """
         data = getattr(class_obj, self.name).encode("utf-8")
         if len(data) > self.length:
             trunc = data[: self.length]
@@ -765,11 +883,43 @@ class FieldSpecCompiledFixedString(FieldSpecCompiled):
         return idx + self.length
 
     def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        """
+        Deserialize the fixed-length UTF-8 string field from the buffer at `idx`.
+
+        Reads exactly `self.length` bytes, strips trailing ASCII spaces,
+        and decodes the result as a UTF-8 string.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in the buffer at which to read data.
+
+        Returns:
+            Tuple[str, int]:
+                - The deserialized string (with trailing spaces removed).
+                - The updated buffer index after reading.
+
+        Raises:
+            UnicodeDecodeError: If the bytes cannot be decoded as UTF-8.
+        """
         data = bytes(buffer[idx:idx + self.length])
         s = data.rstrip(b" ").decode("utf-8")
         return s, idx + self.length
 
     def serialized_byte_size(self, class_obj: Any) -> int:
+        """
+        Return the fixed number of bytes used to serialize this string field.
+
+        Args:
+            class_obj (Any):
+                The instance containing the string field.
+
+        Returns:
+            int:
+                The fixed byte size for serialization (`self.length`).
+        """
         return self.length
 
 
@@ -799,7 +949,7 @@ class FieldSpecCompiledTuple(FieldSpecCompiledBasic):
                 The buffer into which to serialize data.
 
             idx (int):
-                The starting index in the buffer to write data.
+                The starting index in the buffer at which to write data.
 
         Returns:
             int:
@@ -825,7 +975,7 @@ class FieldSpecCompiledTuple(FieldSpecCompiledBasic):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             Tuple[Any, int]:
@@ -899,7 +1049,7 @@ class FieldSpecCompiledGeneric(FieldSpecCompiled):
                 The buffer into which to serialize data.
 
             idx (int):
-                The starting index in the buffer to write data.
+                The starting index in the buffer at which to write data.
 
         Returns:
             int:
@@ -921,7 +1071,7 @@ class FieldSpecCompiledGeneric(FieldSpecCompiled):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             Tuple[Any, int]:
@@ -993,7 +1143,7 @@ class FieldSpecCompiledGenericArray(FieldSpecCompiled):
                 The buffer into which to serialize data.
 
             idx (int):
-                The starting index in the buffer to write data.
+                The starting index in the buffer at which to write data.
 
         Returns:
             int:
@@ -1022,7 +1172,7 @@ class FieldSpecCompiledGenericArray(FieldSpecCompiled):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             tuple[Any, int]:
@@ -1103,7 +1253,7 @@ class FieldSpecCompiledGenericOptional(FieldSpecCompiled):
                 The buffer into which to serialize data.
 
             idx (int):
-                The starting index in the buffer to write data.
+                The starting index in the buffer at which to write data.
 
         Returns:
             int:
@@ -1133,7 +1283,7 @@ class FieldSpecCompiledGenericOptional(FieldSpecCompiled):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             tuple[Any, int]:
@@ -1223,7 +1373,7 @@ class FieldSpecCompiledGenericOptionalArray(FieldSpecCompiled):
                 The buffer into which to serialize data.
 
             idx (int):
-                The starting index in the buffer to write data.
+                The starting index in the buffer at which to write data.
 
         Returns:
             int:
@@ -1265,7 +1415,7 @@ class FieldSpecCompiledGenericOptionalArray(FieldSpecCompiled):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             tuple[list[Any | None], int]:
@@ -1340,7 +1490,7 @@ class FifoSerializable:
                 The buffer into which to serialize the data.
 
             idx (int):
-                The starting index in the buffer to write data.
+                The starting index in the buffer at which to write data.
 
         Returns:
             int:
@@ -1358,7 +1508,7 @@ class FifoSerializable:
                 The buffer containing the serialized data.
 
             idx (int):
-                The starting index in the buffer to read data.
+                The starting index in the buffer at which to read data.
 
         Returns:
             Tuple[Self, int]:

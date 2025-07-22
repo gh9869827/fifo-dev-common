@@ -19,6 +19,11 @@ _NUMPY_DTYPES: dict[str, np.dtype[Any]] = {
     "f64": np.dtype(np.float64),
 }
 
+# Supported struct format characters for all primitive field types
+_ALLOWED_STRUCT_FORMAT_CHARS = {
+    "b", "B", "h", "H", "i", "I", "l", "L", "q", "Q", "e", "f", "d",
+}
+
 def compile_field(field: Field[Any]) -> FieldSpecCompiled:
     """
     Compile a dataclass Field into a corresponding FieldSpecCompiled instance.
@@ -123,7 +128,13 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                     raise ValueError("Type must be provided for generic array")
                 return FieldSpecCompiledGenericArray(name, ptype)
 
-            return FieldSpecCompiledArray(name, struct_format[1])
+            element_type = struct_format[1]
+            if element_type not in _ALLOWED_STRUCT_FORMAT_CHARS:
+                raise ValueError(
+                    "Struct only supports format characters "
+                    + "".join(sorted(_ALLOWED_STRUCT_FORMAT_CHARS))
+                )
+            return FieldSpecCompiledArray(name, element_type)
 
         if struct_format[0] == "?":
             if not len(struct_format) == 2:
@@ -134,7 +145,13 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                     raise ValueError("Type must be provided for generic optional")
                 return FieldSpecCompiledGenericOptional(name, ptype)
 
-            return FieldSpecCompiledOptional(name, struct_format[1])
+            inner_type = struct_format[1]
+            if inner_type not in _ALLOWED_STRUCT_FORMAT_CHARS:
+                raise ValueError(
+                    "Struct only supports format characters "
+                    + "".join(sorted(_ALLOWED_STRUCT_FORMAT_CHARS))
+                )
+            return FieldSpecCompiledOptional(name, inner_type)
 
         if struct_format.startswith("E<"):
             if not (len(struct_format) == 4 and struct_format[3] == ">"):
@@ -159,6 +176,11 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                 struct.calcsize('<' + inner_types)
             except struct.error as exc:
                 raise ValueError("Struct format for tuple type invalid") from exc
+            if any(c not in _ALLOWED_STRUCT_FORMAT_CHARS for c in inner_types):
+                raise ValueError(
+                    "Struct only supports format characters "
+                    + "".join(sorted(_ALLOWED_STRUCT_FORMAT_CHARS))
+                )
             return FieldSpecCompiledTuple(name, inner_types)
 
         if struct_format == "S":
@@ -172,6 +194,11 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                 raise ValueError("Struct format for string type invalid")
             return FieldSpecCompiledFixedString(name, int(length_txt))
 
+        if len(struct_format) != 1 or struct_format not in _ALLOWED_STRUCT_FORMAT_CHARS:
+            raise ValueError(
+                "Struct only supports format characters "
+                + "".join(sorted(_ALLOWED_STRUCT_FORMAT_CHARS))
+            )
         return FieldSpecCompiledBasic(name, struct_format)
 
     if ptype is not None:

@@ -265,9 +265,12 @@ def test_super_combo():
     ("[_]", None, "Type must be provided for generic array"),
     ("[?_]", None, "Type must be provided for optional array"),
 
+    ("[x]", None, "Struct only supports format characters BHILQbdefhilq"),
+
     ("?",   None, "Struct format for optional type invalid"),
     ("?__", None, "Struct format for optional type invalid"),
     ("?_",  None, "Type must be provided for generic optional"),
+    ("?x", None, "Struct only supports format characters BHILQbdefhilq"),
 
     ("E<",  None, "Struct format for enum type invalid"),
     ("E<>",  None, "Struct format for enum type invalid"),
@@ -278,6 +281,7 @@ def test_super_combo():
     ("T<",   None, "Struct format for tuple type invalid"),
     ("T<>",  None, "Struct format for tuple type invalid"),
     ("T<__>", None, "Struct format for tuple type invalid"),
+    ("T<x>", None, "Struct only supports format characters BHILQbdefhilq"),
 
     ("S[", None, "Struct format for string type invalid"),
     ("S[]", None, "Struct format for string type invalid"),

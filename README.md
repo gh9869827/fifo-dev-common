@@ -110,6 +110,8 @@ Decorators to define tools and runtime query sources callable by large language 
 
 These attach structured metadata derived from docstrings—enabling parsing, validation, and schema generation for transparent agent planning and execution.
 
+---
+
 ### `fifo_dev_common.serialization.fifo_serialization`
 
 Provides a lightweight, efficient binary serialization framework for Python dataclasses.
@@ -120,27 +122,21 @@ Provides a lightweight, efficient binary serialization framework for Python data
 - Designed for preallocated buffers to maximize performance and minimize allocations.  
 - Works well with microcontroller and embedded system data formats as it is a compact binary format prioritizing direct raw serialization with very little overhead.
 
-**Supported format strings examples:**
+**Supported Format Strings:**
 
-| Format String | Description                                  | Serialization Details                            | Example                                  |
-|---------------|----------------------------------------------|-------------------------------------------------|------------------------------------------|
-| `I`           | Unsigned 4-byte integer                      | 4 bytes little-endian integer                    | `field(metadata={"format": "I"})`        |
-| `f`           | 4-byte float                                 | 4 bytes little-endian float                      | `field(metadata={"format": "f"})`        |
-| `[f]`         | Array of floats                              | 4-byte length prefix + consecutive float values | `field(metadata={"format": "[f]"})`      |
-| `[I]`         | Array of unsigned ints                       | 4-byte length prefix + consecutive uint32 values| `field(metadata={"format": "[I]"})`      |
-| `[np:x]`      | NumPy array of type `x` (`u8`, `u16`, `u32`, `i8`, `i16`, `i32`, `f32`, `f64`) | 1 byte ndim + N x 4 byte shape + raw data | `field(metadata={"format": "[np:x]"})` |
-| `?I`          | Optional unsigned int (presence flag + value) | 1 byte presence flag (0/1) + 4-byte uint if present | `field(metadata={"format": "?I"})`        |
-| `?_`          | Optional nested serializable object (`_` is literal) | 1 byte presence flag + serialized nested object if present | `field(metadata={"format": "?_", "ptype": MyClass})` |
-| `[_]`         | Array of nested serializable objects (`_` is literal) | 4-byte length prefix + serialized nested objects in sequence | `field(metadata={"format": "[_]", "ptype": MyClass})` |
-| `[?_]`        | Array of optional nested objects (`_` is literal) | 4-byte length + presence bitmap + serialized present objects | `field(metadata={"format": "[?_]", "ptype": MyClass})` |
-| `S`           | UTF-8 string with length prefix                | 4-byte length prefix + UTF-8 bytes           | `field(metadata={"format": "S"})` |
-| `S[x]`        | Fixed-length UTF-8 string of `x` bytes          | UTF-8 bytes padded/truncated to `x` bytes    | `field(metadata={"format": "S[8]"})` |
-| `E<x>`        | Enum stored as integer type `x` (`b`, `B`, `h`, `H`, `i`, `I`) | Integer representing the Enum value using chosen size | `field(metadata={"format": "E<B>", "ptype": MyEnum})` |
-| `T<x>`        | Fixed-length tuple of basic types            | Raw binary data for each tuple element           | `field(metadata={"format": "T<If>"})` |
-
-**Note:** Standard [Python `struct` format characters](https://docs.python.org/3/library/struct.html#format-characters) are supported for scalar types, such as `B`, `b`, `H`, `h`, `I`, `i`, `Q`, `q`, `f`, and `d`.
-
-Tuples encode elements consecutively with no length prefix or additional metadata.
+| Format | Description | Serialization Details | Notes |
+|---------|-------------|------------------------|-------|
+| `x`     | **Primitive value** | Serialized directly using `struct` | `x` must be one of: `b B h H i I l L q Q e f d` |
+| `[x]`   | **Array of primitives** | 4-byte length prefix + consecutive `x` values | `x` must be one of: `b B h H i I l L q Q e f d` |
+| `?x`    | **Optional primitive** | 1-byte presence flag + `x` if present | `x` must be one of: `b B h H i I l L q Q e f d` |
+| `T[xx...]`| **Fixed-length tuple of primitives** | Each element serialized consecutively (no prefix) | Each `x` in `xx...` must be one of: `b B h H i I l L q Q e f d` |
+| `[np:x]`| **NumPy array** | 1-byte ndim + N×4-byte shape + raw data buffer | `x` must be NumPy dtype: `u8`, `u16`, `u32`, `i8`, `i16`, `i32`, `f32`, `f64` |
+| `S`     | **Variable-length UTF-8 string** | 4-byte length prefix + UTF-8 encoded bytes | - |
+| `S[x]`  | **Fixed-length UTF-8 string** | UTF-8 encoded, space-padded/truncated to `x` bytes (UTF-8 safe) | - |
+| `E<x>`  | **Enum stored as integer** | Stored as `x` (e.g., `B`, `H`, `I`) | `x` must be one of: `b B h H i I` |
+| `?_`    | **Optional nested object** | 1-byte presence flag + nested serialization if present | - |
+| `[_]`   | **Array of nested objects** | 4-byte length prefix + consecutive nested serializations | - |
+| `[?_]`  | **Array of optional nested objects** | 4-byte length + presence bitmap + serialized present objects | - |
 
 ---
 

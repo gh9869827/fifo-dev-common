@@ -399,3 +399,46 @@ def test_string_fixed_padding_and_truncation() -> None:
     long.serialize_to_bytes(buf2, 0)
     restored2, _ = TestStringFixed.deserialize_from_bytes(buf2, 0)
     assert restored2.tag == "\u00e9" * 4
+
+def test_string_fixed_strip_trailing_spaces_only() -> None:
+    # Leading and trailing spaces
+    s = "  abc  "  # Two spaces before and after
+    obj = TestStringFixed(s)
+    buf = bytearray(obj.serialized_byte_size())
+    obj.serialize_to_bytes(buf, 0)
+    # Buffer should be b'  abc   ' (8 bytes: 2+3+3)
+    assert buf.decode("utf-8") == "  abc   "
+    restored, _ = TestStringFixed.deserialize_from_bytes(buf, 0)
+    # Trailing spaces stripped, leading spaces preserved
+    assert restored.tag == "  abc"
+
+    # Trailing spaces only
+    obj2 = TestStringFixed("abc   ")
+    buf2 = bytearray(obj2.serialized_byte_size())
+    obj2.serialize_to_bytes(buf2, 0)
+    assert buf2.decode("utf-8") == "abc     "
+    restored2, _ = TestStringFixed.deserialize_from_bytes(buf2, 0)
+    assert restored2.tag == "abc"
+
+    # Leading spaces only
+    obj3 = TestStringFixed("   abc")
+    buf3 = bytearray(obj3.serialized_byte_size())
+    obj3.serialize_to_bytes(buf3, 0)
+    assert buf3.decode("utf-8") == "   abc  "
+    restored3, _ = TestStringFixed.deserialize_from_bytes(buf3, 0)
+    assert restored3.tag == "   abc"
+
+def test_string_fixed_emoji_truncation_no_length_hack() -> None:
+    s = "..🚀🚀"
+    # ".." is 2 bytes (1 each), each rocket is 4 bytes => total 10 bytes
+    # If field is fixed-length 8, only "..🚀" (2+4=6 bytes) plus part of the next, 
+    # but since we only fit full codepoints, we should get "..🚀" (6 bytes) + 2 spaces.
+    obj = TestStringFixed(s)
+    # Fixed length 8, as defined in field metadata
+    buf = bytearray(obj.serialized_byte_size())
+    obj.serialize_to_bytes(buf, 0)
+    # After serialization: b'..🚀   '
+    assert buf == ("..🚀" + "  ").encode("utf-8")
+    restored, _ = TestStringFixed.deserialize_from_bytes(buf, 0)
+    # After deserialization, only "..🚀" should remain
+    assert restored.tag == "..🚀"

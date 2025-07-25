@@ -1569,13 +1569,18 @@ def serializable(cls: C) -> C:
     The injected methods handle binary serialization and deserialization
     of the class fields according to their specified formats and types.
 
+    If the class defines a classmethod named `from_deserialized_fields(**kwargs)`,
+    it will be used instead of the regular constructor during deserialization.
+    This allows support for classes that require custom initialization logic
+    or that use private fields not accepted by `__init__`.
+
     Args:
         cls (Type[C]):
-            The dataclass type to be enhanced with serialization methods.
+            The dataclass type to be enhanced with serialization and deserialization methods.
 
     Returns:
         Type[C]:
-            The same class type with added serialization and deserialization methods.
+            The same class type with added serialization and deserialization capabilities.
     """
     compiled_fields: list[FieldSpecCompiled] = []
     for f in fields(cls):
@@ -1596,6 +1601,13 @@ def serializable(cls: C) -> C:
         for field in compiled_fields:
             obj, idx = field.deserialize_from_bytes(buffer, idx)
             args[field.name] = obj
+
+        # If the class defines a custom deserialization constructor, use it first
+        factory = getattr(cls, "from_deserialized_fields", None)
+        if callable(factory):
+            return factory(**args), idx  # type: ignore
+
+        # if not present then call the regular constructor
         return cls(**args), idx  # type: ignore
 
     def serialized_byte_size(self: C) -> int:

@@ -13,7 +13,8 @@ class DummySendSocket:
     def __init__(self):
         self.data = bytearray()
 
-    def sendall(self, data: bytes | bytearray | memoryview):
+    def sendall(self, data: bytes | bytearray | memoryview, flags: int = 0):
+        _ = flags
         self.data.extend(data)
 
 

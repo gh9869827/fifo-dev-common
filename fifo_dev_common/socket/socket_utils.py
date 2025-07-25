@@ -8,7 +8,7 @@ class SupportsRecvInto(Protocol):
 
 @runtime_checkable
 class SupportsSendAll(Protocol):
-    def sendall(self, data: bytes | bytearray) -> None: ...
+    def sendall(self, data: bytes | bytearray | memoryview, flags: int = ..., /) -> None: ...
 
 
 def recv_all(sock: SupportsRecvInto, n: int) -> bytearray:

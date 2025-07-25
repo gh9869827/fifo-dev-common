@@ -36,6 +36,7 @@ See the [Example Usage](#-example-usage) section below for how these functions, 
   - [mini_docstring](#fifo_dev_commonintrospectionmini_docstring)
   - [read_only_list](#fifo_dev_commoncontainersread_onlyread_only_list)
   - [tool_decorator](#fifo_dev_commonintrospectiontool_decorator)
+  - [socket_utils](#fifo_dev_commonsocketsocket_utils)
   - [fifo_serialization](#fifo_dev_commonserializationfifo_serialization)
   - [fifo_event](#fifo_dev_commoneventfifo_event)
 - [✅ Example Usage](#-example-usage)
@@ -111,6 +112,19 @@ Decorators to define tools and runtime query sources callable by large language 
 - `@tool_query_source(name)`: Define a no-arg runtime data source that provides context for LLM execution planning.
 
 These attach structured metadata derived from docstrings—enabling parsing, validation, and schema generation for transparent agent planning and execution.
+
+---
+
+### `fifo_dev_common.socket.socket_utils`
+
+Defines `recv_all(sock, n)`, a helper that receives exactly `n` bytes from a socket-like object using `recv_into()` and `memoryview` for efficient reading.
+
+Also provides two runtime-checkable protocols for socket abstraction:
+
+- `SupportsRecvInto`: defines `recv_into(buffer, nbytes)`
+- `SupportsSendAll`: defines `sendall(data, flags=...)`
+
+These allow code to accept real sockets or compatible mock objects without relying on concrete types.
 
 ---
 

@@ -5,6 +5,7 @@ from typing import Any, Type, TypeVar, ClassVar
 import threading
 
 from fifo_dev_common.serialization.fifo_serialization import FifoSerializable, serializable
+from fifo_dev_common.socket.socket_utils import SupportsRecvInto, SupportsSendAll, recv_all
 
 T = TypeVar('T', bound='FifoEvent')
 
@@ -122,7 +123,7 @@ class FifoEvent(FifoSerializable):
             bytearray:
                 The complete serialized event packet.
         """
-        payload_size = self.serialized_byte_size()  # Your method returns payload size
+        payload_size = self.serialized_byte_size()
 
         buffer = bytearray(4 + payload_size)
 
@@ -133,6 +134,40 @@ class FifoEvent(FifoSerializable):
         self.serialize_to_bytes(buffer, 4)
 
         return buffer
+
+    def serialize_to_socket(self, sock: SupportsSendAll):
+        """
+        Serialize the object and send it over the given socket with a 4-byte length prefix.
+
+        The serialized format is:
+            [length (4 bytes)] + [event_id (4 bytes)] + [payload]
+
+        This method computes the serialized byte size, allocates a single buffer,
+        writes the total message length and event ID, serializes the payload, and
+        sends the entire buffer using `sock.sendall()`.
+
+        Args:
+            sock (SupportsSendAll):
+                A socket-like object that supports `sendall()` for writing bytes.
+
+        Note:
+            This method intentionally duplicates part of the logic from `to_bytes()`
+            to avoid multiple memory allocations. Calling `to_bytes()` would result
+            in one allocation for the payload and another for prefixing with the length.
+            This version constructs the full framed message in a single buffer for efficiency.
+        """
+        payload_size = self.serialized_byte_size()
+        length = payload_size + 4  # +4 for the event ID
+
+        buffer = bytearray(4 + length)
+
+        # Write the length and the event id
+        struct.pack_into("<II", buffer, 0, length, self.event_id)
+
+        # Write payload
+        self.serialize_to_bytes(buffer, 8)  # +8 for the length and the event ID
+
+        sock.sendall(buffer)
 
     @classmethod
     def from_bytes(cls, data: bytearray) -> FifoEvent:
@@ -163,6 +198,43 @@ class FifoEvent(FifoSerializable):
         obj, _ = subclass.deserialize_from_bytes(data, 4)
 
         return obj
+
+    @classmethod
+    def deserialize_from_socket(cls, sock: SupportsRecvInto) -> FifoEvent:
+        """
+        Receive and deserialize a FIFO event from the given socket.
+
+        This method reads a 4-byte length prefix to determine the size of the
+        incoming message, then reads the specified number of bytes from the socket.
+        It then delegates deserialization to `from_bytes()`, which performs
+        event ID dispatch and constructs the appropriate subclass instance.
+
+        Args:
+            sock (SupportsRecvInto):
+                A socket-like object that supports `recv_into()` for reading bytes.
+
+        Returns:
+            FifoEvent:
+                The deserialized event instance.
+
+        Raises:
+            ConnectionError:
+                If the socket is closed or incomplete data is received.
+
+            ValueError:
+                If the event ID is unknown or the buffer is too short to decode.
+        """
+        length_bytes = recv_all(sock, 4)
+
+        if len(length_bytes) != 4:
+            raise ConnectionError(
+                f"Incomplete message header: expected 4 bytes, got {len(length_bytes)}"
+            )
+
+        length, = struct.unpack("<I", length_bytes)
+        payload = recv_all(sock, length)
+
+        return cls.from_bytes(payload)
 
     @classmethod
     def clear_registry(cls):

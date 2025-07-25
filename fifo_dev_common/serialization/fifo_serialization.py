@@ -7,6 +7,7 @@ import struct
 from typing import Any, Self, Tuple, Type, TypeVar
 import numpy as np
 from numpy.typing import NDArray
+from fifo_dev_common.socket.socket_utils import SupportsRecvInto, SupportsSendAll, recv_all
 
 _NUMPY_DTYPES: dict[str, np.dtype[Any]] = {
     "u8": np.dtype(np.uint8),
@@ -1553,6 +1554,58 @@ class FifoSerializable:
                 The byte size needed for serialization.
         """
         raise RuntimeError("not implemented yet") # pragma: no cover
+
+    def serialize_to_socket(self, sock: SupportsSendAll):
+        """
+        Serialize the object and send it over the given socket with a 4-byte length prefix.
+
+        This method computes the serialized byte size, allocates a buffer,
+        writes the length as a 4-byte little-endian unsigned integer, serializes
+        the object into the buffer, and sends the entire buffer using `sock.sendall()`.
+
+        Args:
+            sock (SupportsSendAll):
+                A socket-like object that supports `sendall()` for writing bytes.
+        """
+        length = self.serialized_byte_size()
+        buffer = bytearray(4 + length)
+        struct.pack_into("<I", buffer, 0, length)
+        self.serialize_to_bytes(buffer, 4)
+        sock.sendall(buffer)
+
+    @classmethod
+    def deserialize_from_socket(cls, sock: SupportsRecvInto) -> Self:
+        """
+        Receive and deserialize an object from the given socket.
+
+        Reads a 4-byte length prefix to determine the size of the incoming message,
+        then reads the specified number of bytes from the socket and deserializes
+        the object using the class's `deserialize_from_bytes()` method.
+
+        Args:
+            sock (SupportsRecvInto):
+                A socket-like object that supports `recv_into()` for reading bytes.
+
+        Returns:
+            Self:
+                The deserialized instance of the class.
+
+        Raises:
+            ConnectionError:
+                If the socket is closed or incomplete data is received.
+        """
+        length_bytes = recv_all(sock, 4)
+
+        if len(length_bytes) != 4:
+            raise ConnectionError(
+                f"Incomplete message header: expected 4 bytes, got {len(length_bytes)}"
+            )
+
+        length, = struct.unpack("<I", length_bytes)
+        payload = recv_all(sock, length)
+
+        obj, _ = cls.deserialize_from_bytes(payload, 0)
+        return obj
 
 
 def serializable(cls: C) -> C:

@@ -36,6 +36,8 @@ See the [Example Usage](#-example-usage) section below for how these functions, 
   - [mini_docstring](#fifo_dev_commonintrospectionmini_docstring)
   - [read_only_list](#fifo_dev_commoncontainersread_onlyread_only_list)
   - [tool_decorator](#fifo_dev_commonintrospectiontool_decorator)
+  - [fifo_serialization](#fifo_dev_commonserializationfifo_serialization)
+  - [fifo_event](#fifo_dev_commoneventfifo_event)
 - [✅ Example Usage](#-example-usage)
 - [🧪 Tests](#-tests)
 - [📄 License](#-license)

@@ -1,6 +1,6 @@
 [project]
 name = "fifo-dev-common"
-version = "0.1.0"
+version = "0.1.0a0"
 description = "Core Python utilities shared across all fifo-dev repositories"
 authors = [
   { name = "Florent Gastoud" }

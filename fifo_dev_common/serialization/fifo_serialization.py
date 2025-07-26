@@ -22,7 +22,7 @@ _NUMPY_DTYPES: dict[str, np.dtype[Any]] = {
 
 # Supported struct format characters for all primitive field types
 _ALLOWED_STRUCT_FORMAT_CHARS = {
-    "b", "B", "h", "H", "i", "I", "l", "L", "q", "Q", "e", "f", "d",
+    "b", "B", "h", "H", "i", "I", "l", "L", "q", "Q", "e", "f", "d", "y",
 }
 
 def compile_field(field: Field[Any]) -> FieldSpecCompiled:
@@ -121,6 +121,15 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                     raise ValueError("Type must be provided for optional array")
                 return FieldSpecCompiledGenericOptionalArray(name, ptype)
 
+            if struct_format.startswith("[?") and struct_format.endswith("]") and len(struct_format) == 4:
+                element_type = struct_format[2]
+                if element_type not in _ALLOWED_STRUCT_FORMAT_CHARS:
+                    raise ValueError(
+                        "Struct only supports format characters "
+                        + "".join(sorted(_ALLOWED_STRUCT_FORMAT_CHARS))
+                    )
+                return FieldSpecCompiledOptionalPrimitiveArray(name, element_type)
+
             if not (len(struct_format) == 3 and struct_format[2] == "]"):
                 raise ValueError("Struct format for array type invalid")
 
@@ -174,7 +183,7 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                 raise ValueError("Struct format for tuple type invalid")
             inner_types = struct_format[2:-1]
             try:
-                struct.calcsize('<' + inner_types)
+                struct.calcsize('<' + inner_types.replace('y', 'B'))
             except struct.error as exc:
                 raise ValueError("Struct format for tuple type invalid") from exc
             if any(c not in _ALLOWED_STRUCT_FORMAT_CHARS for c in inner_types):
@@ -330,7 +339,8 @@ class FieldSpecCompiledBasic(FieldSpecCompiled):
                 The struct format string defining the binary layout.
         """
         super().__init__(name)
-        self.struct_format = struct_format
+        self._is_bool = struct_format == "y"
+        self.struct_format = "B" if self._is_bool else struct_format
         self._struct_format_byte_length = struct.calcsize('<' + self.struct_format)
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
@@ -355,7 +365,8 @@ class FieldSpecCompiledBasic(FieldSpecCompiled):
         Raises:
             Implementation-specific exceptions if serialization fails.
         """
-        struct.pack_into('<' + self.struct_format, buffer, idx, getattr(class_obj, self.name))
+        value = getattr(class_obj, self.name)
+        struct.pack_into('<' + self.struct_format, buffer, idx, value)
         return idx + self._struct_format_byte_length
 
     def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
@@ -380,6 +391,8 @@ class FieldSpecCompiledBasic(FieldSpecCompiled):
         obj = struct.unpack_from('<' + self.struct_format, buffer, idx)
         if len(obj) == 1:
             obj = obj[0]
+        if self._is_bool:
+            obj = bool(obj)
         return obj, idx + self._struct_format_byte_length
 
     def serialized_byte_size(self, class_obj: Any) -> int:
@@ -529,9 +542,11 @@ class FieldSpecCompiledOptional(FieldSpecCompiledBasic):
         if present == 0:
             return None, idx
 
-        obj = struct.unpack_from(self.struct_format, buffer, idx)
+        obj = struct.unpack_from('<' + self.struct_format, buffer, idx)
         if len(obj) == 1:
             obj = obj[0]
+        if self._is_bool:
+            obj = bool(obj)
         return obj, idx + self._struct_format_byte_length
 
     def serialized_byte_size(self, class_obj: Any) -> int:
@@ -618,6 +633,8 @@ class FieldSpecCompiledArray(FieldSpecCompiledBasic):
         length, = struct.unpack_from("<I", buffer, idx)
         idx += 4
         items = list(struct.unpack_from('<' + self.struct_format * length, buffer, idx))
+        if self._is_bool:
+            items = [bool(v) for v in items]
         return items, idx + self._struct_format_byte_length * length
 
     def serialized_byte_size(self, class_obj: Any) -> int:
@@ -634,6 +651,247 @@ class FieldSpecCompiledArray(FieldSpecCompiledBasic):
                 The total byte size needed to serialize the array field.
         """
         return 4 + len(getattr(class_obj, self.name)) * self._struct_format_byte_length
+
+
+class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
+    """Base helper for optional array fields serialized with a bitmap.
+
+    Arrays using this layout encode whether each element is present with a
+    bit-packed bitmap placed right after the length prefix. Only the values for
+    present elements are stored in the payload. Subclasses are responsible for
+    the element-level (de)serialization via the ``_serialize_element`` and
+    ``_deserialize_element`` hooks and for reporting the size of an element with
+    ``_element_size``.
+
+    Features:
+        - Serializes the array length as a 4-byte unsigned int.
+        - Packs a presence bitmap (1 bit per element) immediately after the
+          length.
+        - Writes only the serialized form of present elements in sequence.
+        - Computes the serialized size accounting for the bitmap and present
+          elements only.
+    """
+
+    @abc.abstractmethod
+    def _serialize_element(self, elem: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize a single element into ``buffer`` starting at ``idx``.
+
+        Args:
+            elem (Any):
+                The element value to serialize.
+
+            buffer (bytearray):
+                The buffer into which to serialize the element.
+
+            idx (int):
+                The starting index in ``buffer`` at which to write data.
+
+        Returns:
+            int:
+                The updated buffer index after writing the element.
+        """
+
+    @abc.abstractmethod
+    def _deserialize_element(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+        """
+        Deserialize a single element from ``buffer`` starting at ``idx``.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in ``buffer`` at which to read data.
+
+        Returns:
+            tuple[Any, int]:
+                - The deserialized element value.
+                - The updated buffer index after reading the element.
+        """
+
+    @abc.abstractmethod
+    def _element_size(self, elem: Any) -> int:
+        """
+        Return the serialized size in bytes of ``elem``.
+
+        Args:
+            elem (Any):
+                The element to measure.
+
+        Returns:
+            int:
+                The number of bytes required to serialize ``elem``.
+        """
+
+    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize the optional array field into ``buffer`` starting at ``idx``.
+
+        Writes the following sequence:
+            - 4 bytes: array length (little-endian unsigned int)
+            - N bits: presence bitmap for each element
+            - Serialized payloads of present elements in order
+
+        Args:
+            class_obj (Any):
+                The instance containing the array field.
+
+            buffer (bytearray):
+                The buffer into which to serialize data.
+
+            idx (int):
+                The starting index in ``buffer`` at which to write data.
+
+        Returns:
+            int:
+                The updated buffer index after writing the entire array.
+        """
+        array = getattr(class_obj, self.name)
+        length = len(array)
+        struct.pack_into("<I", buffer, idx, length)
+        idx += 4
+        bitmap_len = (length + 7) // 8
+        bitmap = bytearray(bitmap_len)
+        for i, elem in enumerate(array):
+            if elem is not None:
+                bitmap[i // 8] |= 1 << (i % 8)
+        buffer[idx:idx + bitmap_len] = bitmap
+        idx += bitmap_len
+        for elem in array:
+            if elem is not None:
+                idx = self._serialize_element(elem, buffer, idx)
+        return idx
+
+    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+        """
+        Deserialize an optional array field from ``buffer`` starting at ``idx``.
+
+        Reads the sequence produced by :meth:`serialize_to_bytes` and reconstructs
+        a list containing either element values or ``None`` for missing items.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in ``buffer`` from which to read.
+
+        Returns:
+            tuple[list[Any | None], int]:
+                - The list of deserialized elements.
+                - The updated buffer index after reading the entire array.
+        """
+        length, = struct.unpack_from("<I", buffer, idx)
+        idx += 4
+        bitmap_len = (length + 7) // 8
+        bitmap = buffer[idx:idx + bitmap_len]
+        idx += bitmap_len
+        items: list[Any | None] = []
+        for i in range(length):
+            if bitmap[i // 8] & (1 << (i % 8)):
+                item, idx = self._deserialize_element(buffer, idx)
+                items.append(item)
+            else:
+                items.append(None)
+        return items, idx
+
+    def serialized_byte_size(self, class_obj: Any) -> int:
+        """
+        Compute the number of bytes required to serialize the optional array.
+
+        The calculation accounts for:
+            - 4 bytes for the length prefix
+            - N bits (rounded up to bytes) for the presence bitmap
+            - Only the serialized sizes of present elements
+
+        Args:
+            class_obj (Any):
+                The instance containing the array field.
+
+        Returns:
+            int:
+                The total byte size needed to serialize the array field.
+        """
+        array = getattr(class_obj, self.name)
+        total = 4 + (len(array) + 7) // 8
+        for elem in array:
+            if elem is not None:
+                total += self._element_size(elem)
+        return total
+
+
+class FieldSpecCompiledOptionalPrimitiveArray(_FieldSpecCompiledOptionalArrayBase, FieldSpecCompiledBasic):
+    """Optional array of primitive types with presence bitmap."""
+
+    def __init__(self, name: str, struct_format: str):
+        """
+        Initialize with field name and struct format of the primitive element.
+
+        Args:
+            name (str):
+                The name of the array field.
+
+            struct_format (str):
+                Struct format character describing each element's binary layout.
+        """
+        FieldSpecCompiledBasic.__init__(self, name, struct_format)
+
+    def _serialize_element(self, elem: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize a primitive element into ``buffer`` at ``idx``.
+
+        Args:
+            elem (Any):
+                The element value to serialize.
+
+            buffer (bytearray):
+                The buffer into which to serialize the element.
+
+            idx (int):
+                The starting index in ``buffer`` for the element bytes.
+
+        Returns:
+            int:
+                The updated buffer index after writing the element.
+        """
+        struct.pack_into('<' + self.struct_format, buffer, idx, elem)
+        return idx + self._struct_format_byte_length
+
+    def _deserialize_element(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+        """
+        Deserialize a primitive element from ``buffer`` at ``idx``.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in ``buffer`` from which to read.
+
+        Returns:
+            tuple[Any, int]:
+                - The deserialized element value.
+                - The updated buffer index after reading the element.
+        """
+        val = struct.unpack_from('<' + self.struct_format, buffer, idx)[0]
+        if self._is_bool:
+            val = bool(val)
+        return val, idx + self._struct_format_byte_length
+
+    def _element_size(self, elem: Any) -> int:
+        """
+        Return the fixed serialized size of a primitive element.
+
+        Args:
+            elem (Any):
+                Unused; size is constant for all elements.
+
+        Returns:
+            int:
+                The number of bytes used to serialize one element.
+        """
+        return self._struct_format_byte_length
 
 
 class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
@@ -962,6 +1220,11 @@ class FieldSpecCompiledTuple(FieldSpecCompiledBasic):
     e.g. 'II' for (int, int) or 'If' for (int, float).
     """
 
+    def __init__(self, name: str, struct_format: str):
+        self._bool_flags = [c == "y" for c in struct_format]
+        self._has_bool = any(self._bool_flags)
+        super().__init__(name, struct_format.replace("y", "B"))
+
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
         """
         Serialize the tuple field from `class_obj` into the buffer starting at `idx`.
@@ -1015,6 +1278,11 @@ class FieldSpecCompiledTuple(FieldSpecCompiledBasic):
             such as if not enough data is available in the buffer.
         """
         obj = struct.unpack_from('<' + self.struct_format, buffer, idx)
+        if self._has_bool:
+            obj = tuple(
+                bool(v) if flag else v
+                for v, flag in zip(obj, self._bool_flags)
+            )
         return obj, idx + self._struct_format_byte_length
 
     def serialized_byte_size(self, class_obj: Any) -> int:
@@ -1349,7 +1617,7 @@ class FieldSpecCompiledGenericOptional(FieldSpecCompiled):
         return 1 + obj.serialized_byte_size()
 
 
-class FieldSpecCompiledGenericOptionalArray(FieldSpecCompiled):
+class FieldSpecCompiledGenericOptionalArray(_FieldSpecCompiledOptionalArrayBase):
     """
     FieldSpecCompiled subclass for arrays of optional nested serializable objects.
 
@@ -1384,114 +1652,14 @@ class FieldSpecCompiledGenericOptionalArray(FieldSpecCompiled):
         super().__init__(name)
         self.ptype = ptype
 
-    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
-        """
-        Serialize the array of optional nested serializable objects.
+    def _serialize_element(self, elem: Any, buffer: bytearray, idx: int) -> int:
+        return elem.serialize_to_bytes(buffer, idx)
 
-        Writes the following to the buffer, starting at the given index:
-            - 4 bytes: array length (unsigned int, little-endian)
-            - N bits (packed into bytes): presence bitmap (1 if element is present, 0 if None)
-            - Serialized payloads of present elements, in order.
+    def _deserialize_element(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+        return self.ptype.deserialize_from_bytes(buffer, idx)
 
-        Args:
-            class_obj (Any):
-                The instance containing the array field.
-
-            buffer (bytearray):
-                The buffer into which to serialize data.
-
-            idx (int):
-                The starting index in the buffer at which to write data.
-
-        Returns:
-            int:
-                The updated buffer index after writing the entire array.
-
-        Raises:
-            Implementation-specific exceptions if serialization fails.
-        """
-        array: list[Any | None] = getattr(class_obj, self.name)
-        length = len(array)
-        struct.pack_into("<I", buffer, idx, length)
-        idx += 4
-
-        bitmap_len = (length + 7) // 8
-        bitmap = bytearray(bitmap_len)
-        for i, elem in enumerate(array):
-            if elem is not None:
-                bitmap[i // 8] |= 1 << (i % 8)
-        buffer[idx:idx + bitmap_len] = bitmap
-        idx += bitmap_len
-
-        for elem in array:
-            if elem is not None:
-                idx = elem.serialize_to_bytes(buffer, idx)
-
-        return idx
-
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
-        """
-        Deserialize an array of optional nested serializable objects from a buffer.
-
-        Reads:
-            - 4 bytes: array length (unsigned int, little-endian)
-            - N bits (packed into bytes): presence bitmap (1 if element is present, 0 if None)
-            - Serialized payloads of present elements, in order.
-
-        Args:
-            buffer (bytearray):
-                The buffer containing serialized data.
-
-            idx (int):
-                The starting index in the buffer at which to read data.
-
-        Returns:
-            tuple[list[Any | None], int]:
-                - The deserialized list of elements (either instances or None).
-                - The updated buffer index after reading the entire array.
-
-        Raises:
-            Implementation-specific exceptions if deserialization fails.
-        """
-        length, = struct.unpack_from("<I", buffer, idx)
-        idx += 4
-
-        bitmap_len = (length + 7) // 8
-        bitmap = buffer[idx:idx + bitmap_len]
-        idx += bitmap_len
-
-        items: list[Any | None] = []
-        for i in range(length):
-            if bitmap[i // 8] & (1 << (i % 8)):
-                item, idx = self.ptype.deserialize_from_bytes(buffer, idx)
-                items.append(item)
-            else:
-                items.append(None)
-        return items, idx
-
-    def serialized_byte_size(self, class_obj: Any) -> int:
-        """
-        Compute the total number of bytes required to serialize the array field.
-
-        Includes:
-            - 4 bytes for the array length prefix
-            - N bits (rounded up to bytes) for the presence bitmap
-            - Only the size of present (non-None) elements
-
-        Args:
-            class_obj (Any):
-                The instance containing the array field.
-
-        Returns:
-            int:
-                The total number of bytes needed to serialize the field.
-        """
-        array: list[Any | None] = getattr(class_obj, self.name)
-        total = 4 + (len(array) + 7) // 8
-        for elem in array:
-            if elem is not None:
-                total += elem.serialized_byte_size()
-        return total
+    def _element_size(self, elem: Any) -> int:
+        return elem.serialized_byte_size()
 
 
 C = TypeVar('C', bound=type)

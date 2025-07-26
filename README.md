@@ -140,19 +140,23 @@ Provides a lightweight, efficient binary serialization framework for Python data
 
 **Supported Format Strings:**
 
-| Format | Description | Serialization Details | Notes |
-|---------|-------------|------------------------|-------|
-| `x`     | **Primitive value** | Serialized directly using `struct` | `x` must be one of: `b B h H i I l L q Q e f d` |
-| `[x]`   | **Array of primitives** | 4-byte length prefix + consecutive `x` values | `x` must be one of: `b B h H i I l L q Q e f d` |
-| `?x`    | **Optional primitive** | 1-byte presence flag + `x` if present | `x` must be one of: `b B h H i I l L q Q e f d` |
-| `T[xx...]`| **Fixed-length tuple of primitives** | Each element serialized consecutively (no prefix) | Each `x` in `xx...` must be one of: `b B h H i I l L q Q e f d` |
-| `[np:x]`| **NumPy array** | 1-byte ndim + N×4-byte shape + raw data buffer | `x` must be NumPy dtype: `u8`, `u16`, `u32`, `i8`, `i16`, `i32`, `f32`, `f64` |
-| `S`     | **Variable-length UTF-8 string** | 4-byte length prefix + UTF-8 encoded bytes | - |
-| `S[x]`  | **Fixed-length UTF-8 string** | UTF-8 encoded, space-padded/truncated to `x` bytes (UTF-8 safe) | - |
-| `E<x>`  | **Enum stored as integer** | Stored as `x` (e.g., `B`, `H`, `I`) | `x` must be one of: `b B h H i I` |
-| `?_`    | **Optional nested object** | 1-byte presence flag + nested serialization if present | - |
-| `[_]`   | **Array of nested objects** | 4-byte length prefix + consecutive nested serializations | - |
-| `[?_]`  | **Array of optional nested objects** | 4-byte length + presence bitmap + serialized present objects | - |
+| Format     | Description                          | Serialization Details                                                  | Notes                                                                 |
+|------------|--------------------------------------|------------------------------------------------------------------------|-----------------------------------------------------------------------|
+| `x`        | **Primitive value**                  | Serialized directly using `struct`                                     | `x` must be one of: `b B h H i I l L q Q e f d y`                     |
+| `[x]`      | **Array of primitives**              | 4-byte length prefix + consecutive `x` values                          | `x` must be one of: `b B h H i I l L q Q e f d y`                     |
+| `[?x]`     | **Array of optional primitives**     | 4-byte length + presence bitmap + serialized values for present items  | `x` must be one of: `b B h H i I l L q Q e f d y`                     |
+| `?x`       | **Optional primitive**               | 1-byte presence flag + `x` if present                                  | `x` must be one of: `b B h H i I l L q Q e f d y`                     |
+| `T[xx...]` | **Fixed-length tuple of primitives** | Each element serialized consecutively (no prefix)                    | Each `x` must be one of: `b B h H i I l L q Q e f d y`                  |
+| `[np:x]`   | **NumPy array**                      | 1-byte ndim + N×4-byte shape + raw data buffer                         | `x` must be NumPy dtype: `u8`, `u16`, `u32`, `i8`, `i16`, `i32`, `f32`, `f64` |
+| `S`        | **Variable-length UTF-8 string**     | 4-byte length prefix + UTF-8 encoded bytes                             | -                                                                     |
+| `S[x]`     | **Fixed-length UTF-8 string**        | UTF-8 encoded, space-padded or truncated to `x` bytes (UTF-8 safe)     | -                                                                     |
+| `E<x>`     | **Enum stored as integer**           | Stored as `x` (e.g., `B`, `H`, `I`)                                    | `x` must be one of: `b B h H i I`                                     |
+| `?_`       | **Optional nested object**           | 1-byte presence flag + nested serialization if present                 | -                                                                     |
+| `[_]`      | **Array of nested objects**          | 4-byte length prefix + consecutive nested serializations               | -                                                                     |
+| `[?_]`     | **Array of optional nested objects** | 4-byte length + presence bitmap + serialized present objects           | -                                                                     |
+
+**Note:** Primitive format codes `b B h H i I l L q Q e f d` follow the [Python `struct` module](https://docs.python.org/3/library/struct.html).  
+`y` is a special format for booleans, serialized as a single byte (`0` for `False`, `1` for `True`).
 
 ---
 

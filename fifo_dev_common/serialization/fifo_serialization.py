@@ -121,11 +121,14 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                     raise ValueError("Type must be provided for optional array")
                 return FieldSpecCompiledGenericOptionalArray(name, ptype)
 
-            if struct_format.startswith("[?") and struct_format.endswith("]") and len(struct_format) == 4:
+            if (    struct_format.startswith("[?")
+                and struct_format.endswith("]")
+                and len(struct_format) == 4
+            ):
                 element_type = struct_format[2]
                 if element_type not in _ALLOWED_STRUCT_FORMAT_CHARS:
                     raise ValueError(
-                        "Struct only supports format characters "
+                        "Struct format for optional type in arrays only supports format characters "
                         + "".join(sorted(_ALLOWED_STRUCT_FORMAT_CHARS))
                     )
                 return FieldSpecCompiledOptionalPrimitiveArray(name, element_type)
@@ -322,12 +325,17 @@ class FieldSpecCompiledBasic(FieldSpecCompiled):
             The fixed size in bytes computed from `struct_format`,
             representing the number of bytes required to serialize
             the field value.
+
+        _is_bool (bool):
+            True if the original `struct_format` was `'y'` (boolean).
+            Used to distinguish native booleans even though they are encoded as `'B'`.
     """
 
     struct_format: str
     _struct_format_byte_length: int
+    _is_bool: bool
 
-    def __init__(self, name: str, struct_format: str):
+    def __init__(self, name: str, struct_format: str, *args: Any, **kwargs: Any) -> None:
         """
         Initialize with field name and struct format string.
 
@@ -338,7 +346,7 @@ class FieldSpecCompiledBasic(FieldSpecCompiled):
             struct_format (str):
                 The struct format string defining the binary layout.
         """
-        super().__init__(name)
+        super().__init__(name, *args, **kwargs)
         self._is_bool = struct_format == "y"
         self.struct_format = "B" if self._is_bool else struct_format
         self._struct_format_byte_length = struct.calcsize('<' + self.struct_format)
@@ -388,9 +396,7 @@ class FieldSpecCompiledBasic(FieldSpecCompiled):
         Raises:
             Implementation-specific exceptions if deserialization fails.
         """
-        obj = struct.unpack_from('<' + self.struct_format, buffer, idx)
-        if len(obj) == 1:
-            obj = obj[0]
+        obj, = struct.unpack_from('<' + self.struct_format, buffer, idx)
         if self._is_bool:
             obj = bool(obj)
         return obj, idx + self._struct_format_byte_length
@@ -542,9 +548,7 @@ class FieldSpecCompiledOptional(FieldSpecCompiledBasic):
         if present == 0:
             return None, idx
 
-        obj = struct.unpack_from('<' + self.struct_format, buffer, idx)
-        if len(obj) == 1:
-            obj = obj[0]
+        obj, = struct.unpack_from('<' + self.struct_format, buffer, idx)
         if self._is_bool:
             obj = bool(obj)
         return obj, idx + self._struct_format_byte_length
@@ -654,14 +658,19 @@ class FieldSpecCompiledArray(FieldSpecCompiledBasic):
 
 
 class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
-    """Base helper for optional array fields serialized with a bitmap.
+    """
+    Base helper for array-of-optional fields (`list[Optional[...]]`), serialized using
+    a presence bitmap.
+
+    This refers to arrays where each individual element may be present or `None`,
+    as opposed to the entire array being optional.
 
     Arrays using this layout encode whether each element is present with a
     bit-packed bitmap placed right after the length prefix. Only the values for
     present elements are stored in the payload. Subclasses are responsible for
-    the element-level (de)serialization via the ``_serialize_element`` and
-    ``_deserialize_element`` hooks and for reporting the size of an element with
-    ``_element_size``.
+    the element-level (de)serialization via the `_serialize_element` and
+    `_deserialize_element` hooks and for reporting the size of an element with
+    `_element_size`.
 
     Features:
         - Serializes the array length as a 4-byte unsigned int.
@@ -672,10 +681,18 @@ class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
           elements only.
     """
 
+    def __init__(self, *args: Any, **kwargs: Any):  # pylint: disable=useless-parent-delegation
+        """
+        Cooperative constructor for MRO-based initialization.
+
+        Accepts and forwards all arguments to the next class in the MRO chain.
+        """
+        super().__init__(*args, **kwargs)
+
     @abc.abstractmethod
     def _serialize_element(self, elem: Any, buffer: bytearray, idx: int) -> int:
         """
-        Serialize a single element into ``buffer`` starting at ``idx``.
+        Serialize a single element into `buffer` starting at `idx`.
 
         Args:
             elem (Any):
@@ -685,7 +702,7 @@ class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
                 The buffer into which to serialize the element.
 
             idx (int):
-                The starting index in ``buffer`` at which to write data.
+                The starting index in `buffer` at which to write data.
 
         Returns:
             int:
@@ -695,14 +712,14 @@ class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
     @abc.abstractmethod
     def _deserialize_element(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
         """
-        Deserialize a single element from ``buffer`` starting at ``idx``.
+        Deserialize a single element from `buffer` starting at `idx`.
 
         Args:
             buffer (bytearray):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in ``buffer`` at which to read data.
+                The starting index in `buffer` at which to read data.
 
         Returns:
             tuple[Any, int]:
@@ -713,7 +730,7 @@ class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
     @abc.abstractmethod
     def _element_size(self, elem: Any) -> int:
         """
-        Return the serialized size in bytes of ``elem``.
+        Return the serialized size in bytes of `elem`.
 
         Args:
             elem (Any):
@@ -721,16 +738,16 @@ class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
 
         Returns:
             int:
-                The number of bytes required to serialize ``elem``.
+                The number of bytes required to serialize `elem`.
         """
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
         """
-        Serialize the optional array field into ``buffer`` starting at ``idx``.
+        Serialize the array of optional values into `buffer`, starting at index `idx`.
 
         Writes the following sequence:
             - 4 bytes: array length (little-endian unsigned int)
-            - N bits: presence bitmap for each element
+            - N bits: presence bitmap for each element (rounded up to full bytes)
             - Serialized payloads of present elements in order
 
         Args:
@@ -741,7 +758,7 @@ class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
                 The buffer into which to serialize data.
 
             idx (int):
-                The starting index in ``buffer`` at which to write data.
+                The starting index in `buffer` at which to write data.
 
         Returns:
             int:
@@ -765,17 +782,17 @@ class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
 
     def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
         """
-        Deserialize an optional array field from ``buffer`` starting at ``idx``.
+        Deserialize an array of optional values from `buffer`, starting at index `idx`.
 
-        Reads the sequence produced by :meth:`serialize_to_bytes` and reconstructs
-        a list containing either element values or ``None`` for missing items.
+        Reads the sequence produced by `serialize_to_bytes` and reconstructs
+        a list containing either element values or `None` for missing items.
 
         Args:
             buffer (bytearray):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in ``buffer`` from which to read.
+                The starting index in `buffer` from which to read.
 
         Returns:
             tuple[list[Any | None], int]:
@@ -821,8 +838,20 @@ class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
         return total
 
 
-class FieldSpecCompiledOptionalPrimitiveArray(_FieldSpecCompiledOptionalArrayBase, FieldSpecCompiledBasic):
-    """Optional array of primitive types with presence bitmap."""
+class FieldSpecCompiledOptionalPrimitiveArray(_FieldSpecCompiledOptionalArrayBase,
+                                              FieldSpecCompiledBasic):
+    """
+    FieldSpecCompiled subclass for arrays of optional primitive values.
+
+    Supports efficient serialization and deserialization of arrays where each element
+    is either a primitive value or `None`. Presence is encoded using a compact bitmask.
+
+    Features:
+        - Serializes the array length as a 4-byte unsigned int.
+        - Encodes presence with a packed bitmap (1 bit per element) immediately after the length.
+        - Serializes only the present elements in sequence (no data for `None` entries).
+        - Supports arbitrary array lengths and efficient deserialization.
+    """
 
     def __init__(self, name: str, struct_format: str):
         """
@@ -835,11 +864,11 @@ class FieldSpecCompiledOptionalPrimitiveArray(_FieldSpecCompiledOptionalArrayBas
             struct_format (str):
                 Struct format character describing each element's binary layout.
         """
-        FieldSpecCompiledBasic.__init__(self, name, struct_format)
+        super().__init__(name, struct_format)
 
     def _serialize_element(self, elem: Any, buffer: bytearray, idx: int) -> int:
         """
-        Serialize a primitive element into ``buffer`` at ``idx``.
+        Serialize a primitive element into `buffer` at `idx`.
 
         Args:
             elem (Any):
@@ -849,7 +878,7 @@ class FieldSpecCompiledOptionalPrimitiveArray(_FieldSpecCompiledOptionalArrayBas
                 The buffer into which to serialize the element.
 
             idx (int):
-                The starting index in ``buffer`` for the element bytes.
+                The starting index in `buffer` for the element bytes.
 
         Returns:
             int:
@@ -860,14 +889,14 @@ class FieldSpecCompiledOptionalPrimitiveArray(_FieldSpecCompiledOptionalArrayBas
 
     def _deserialize_element(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
         """
-        Deserialize a primitive element from ``buffer`` at ``idx``.
+        Deserialize a primitive element from `buffer` at `idx`.
 
         Args:
             buffer (bytearray):
                 The buffer containing serialized data.
 
             idx (int):
-                The starting index in ``buffer`` from which to read.
+                The starting index in `buffer` from which to read.
 
         Returns:
             tuple[Any, int]:
@@ -1209,7 +1238,7 @@ class FieldSpecCompiledFixedString(FieldSpecCompiled):
         return self.length
 
 
-class FieldSpecCompiledTuple(FieldSpecCompiledBasic):
+class FieldSpecCompiledTuple(FieldSpecCompiled):
     """
     FieldSpecCompiled subclass for fixed-size tuples of basic struct types.
 
@@ -1218,12 +1247,39 @@ class FieldSpecCompiledTuple(FieldSpecCompiledBasic):
 
     The number and types of elements in the tuple are determined by the struct format,
     e.g. 'II' for (int, int) or 'If' for (int, float).
+
+    Attributes:
+
+        struct_format (str):
+            The struct format string describing the binary layout
+            (e.g., 'Ii', 'ffff', 'BB').
+
+        _struct_format_byte_length (int):
+            The fixed size in bytes computed from `struct_format`,
+            representing the number of bytes required to serialize
+            the tuple value.
+
+        _bool_flags (list[bool]):
+            A list indicating which positions in the original `struct_format` were
+            `'y'` (booleans).
+            Each element is `True` if the corresponding format character was `'y'`,
+            otherwise `False`.
+
+        _has_bool (bool):
+            True if at least one `'y'` (boolean) was present in the original `struct_format`.
     """
 
+    _bool_flags: list[bool]
+    _has_bool: bool
+    struct_format: str
+    _struct_format_byte_length: int
+
     def __init__(self, name: str, struct_format: str):
+        super().__init__(name)
         self._bool_flags = [c == "y" for c in struct_format]
         self._has_bool = any(self._bool_flags)
-        super().__init__(name, struct_format.replace("y", "B"))
+        self.struct_format = struct_format.replace("y", "B")
+        self._struct_format_byte_length = struct.calcsize('<' + self.struct_format)
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
         """
@@ -1653,12 +1709,55 @@ class FieldSpecCompiledGenericOptionalArray(_FieldSpecCompiledOptionalArrayBase)
         self.ptype = ptype
 
     def _serialize_element(self, elem: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize a nested element into `buffer` at `idx`.
+
+        Args:
+            elem (Any):
+                The element value to serialize.
+
+            buffer (bytearray):
+                The buffer into which to serialize the element.
+
+            idx (int):
+                The starting index in `buffer` for the element bytes.
+
+        Returns:
+            int:
+                The updated buffer index after writing the element.
+        """
         return elem.serialize_to_bytes(buffer, idx)
 
     def _deserialize_element(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+        """
+        Deserialize a nested element from `buffer` at `idx`.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in `buffer` from which to read.
+
+        Returns:
+            tuple[Any, int]:
+                - The deserialized nested element.
+                - The updated buffer index after reading the element.
+        """
         return self.ptype.deserialize_from_bytes(buffer, idx)
 
     def _element_size(self, elem: Any) -> int:
+        """
+        Return the fixed serialized size of a nested element.
+
+        Args:
+            elem (Any):
+                The element whose serialized size should be computed.
+
+        Returns:
+            int:
+                The number of bytes used to serialize one nested element.
+        """
         return elem.serialized_byte_size()
 
 

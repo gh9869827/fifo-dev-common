@@ -196,7 +196,7 @@ def test_bool_tuple_roundtrip() -> None:
 
 
 def test_bool_optional_array_roundtrip() -> None:
-    arr = [True, None, False]
+    arr: list[bool | None] = [True, None, False]
     obj = TestBoolOptionalArray(arr)
     buf = bytearray(obj.serialized_byte_size())
     obj.serialize_to_bytes(buf, 0)

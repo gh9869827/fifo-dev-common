@@ -125,6 +125,87 @@ def test_array():
 
 @serializable
 @dataclass
+class TestBool(FifoSerializable):
+    flag: bool = field(metadata={"format": "y"})
+
+
+@serializable
+@dataclass
+class TestBoolArray(FifoSerializable):
+    flags: list[bool] = field(metadata={"format": "[y]"})
+
+
+@serializable
+@dataclass
+class TestBoolOptional(FifoSerializable):
+    flag: bool | None = field(metadata={"format": "?y"})
+
+
+@serializable
+@dataclass
+class TestBoolTuple(FifoSerializable):
+    mix: tuple[bool, int, float] = field(metadata={"format": "T<yIf>"})
+
+
+@serializable
+@dataclass
+class TestBoolOptionalArray(FifoSerializable):
+    items: list[bool | None] = field(metadata={"format": "[?y]"})
+
+
+def test_bool_basic_roundtrip() -> None:
+    obj = TestBool(True)
+    buf = bytearray(obj.serialized_byte_size())
+    obj.serialize_to_bytes(buf, 0)
+    restored, _ = TestBool.deserialize_from_bytes(buf, 0)
+    assert restored.flag is True
+
+
+def test_bool_array_roundtrip() -> None:
+    arr = [True, False, True]
+    obj = TestBoolArray(arr)
+    buf = bytearray(obj.serialized_byte_size())
+    obj.serialize_to_bytes(buf, 0)
+    restored, _ = TestBoolArray.deserialize_from_bytes(buf, 0)
+    assert restored.flags == arr
+
+
+def test_bool_optional_roundtrip() -> None:
+    obj = TestBoolOptional(True)
+    buf = bytearray(obj.serialized_byte_size())
+    obj.serialize_to_bytes(buf, 0)
+    restored, _ = TestBoolOptional.deserialize_from_bytes(buf, 0)
+    assert restored.flag is True
+
+    obj_none = TestBoolOptional(None)
+    buf2 = bytearray(obj_none.serialized_byte_size())
+    obj_none.serialize_to_bytes(buf2, 0)
+    restored_none, _ = TestBoolOptional.deserialize_from_bytes(buf2, 0)
+    assert restored_none.flag is None
+
+
+def test_bool_tuple_roundtrip() -> None:
+    tup = (True, 7, 1.5)
+    obj = TestBoolTuple(tup)
+    buf = bytearray(obj.serialized_byte_size())
+    obj.serialize_to_bytes(buf, 0)
+    restored, _ = TestBoolTuple.deserialize_from_bytes(buf, 0)
+    assert restored.mix[0] is True
+    assert restored.mix[1] == 7
+    assert math.isclose(restored.mix[2], 1.5, rel_tol=1e-6, abs_tol=1e-8)
+
+
+def test_bool_optional_array_roundtrip() -> None:
+    arr = [True, None, False]
+    obj = TestBoolOptionalArray(arr)
+    buf = bytearray(obj.serialized_byte_size())
+    obj.serialize_to_bytes(buf, 0)
+    restored, _ = TestBoolOptionalArray.deserialize_from_bytes(buf, 0)
+    assert restored.items == arr
+
+
+@serializable
+@dataclass
 class TestTupleInt(FifoSerializable):
     pair: tuple[int, int] = field(metadata={"format": "T<II>"})
 
@@ -265,12 +346,12 @@ def test_super_combo():
     ("[_]", None, "Type must be provided for generic array"),
     ("[?_]", None, "Type must be provided for optional array"),
 
-    ("[x]", None, "Struct only supports format characters BHILQbdefhilq"),
+    ("[x]", None, "Struct only supports format characters BHILQbdefhilqy"),
 
     ("?",   None, "Struct format for optional type invalid"),
     ("?__", None, "Struct format for optional type invalid"),
     ("?_",  None, "Type must be provided for generic optional"),
-    ("?x", None, "Struct only supports format characters BHILQbdefhilq"),
+    ("?x", None, "Struct only supports format characters BHILQbdefhilqy"),
 
     ("E<",  None, "Struct format for enum type invalid"),
     ("E<>",  None, "Struct format for enum type invalid"),
@@ -281,7 +362,7 @@ def test_super_combo():
     ("T<",   None, "Struct format for tuple type invalid"),
     ("T<>",  None, "Struct format for tuple type invalid"),
     ("T<__>", None, "Struct format for tuple type invalid"),
-    ("T<x>", None, "Struct only supports format characters BHILQbdefhilq"),
+    ("T<x>", None, "Struct only supports format characters BHILQbdefhilqy"),
 
     ("S[", None, "Struct format for string type invalid"),
     ("S[]", None, "Struct format for string type invalid"),

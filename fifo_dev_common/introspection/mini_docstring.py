@@ -1,8 +1,9 @@
 from __future__ import annotations
 from dataclasses import field, dataclass
+import warnings
 import re
 from types import UnionType
-from typing import Any, Type, Union, cast, get_origin, get_args
+from typing import Any, Type, TypeVar, Union, cast, get_origin, get_args
 
 SUPPORTED_TYPES: dict[str, Type[Any]] = {
     "int": int,
@@ -592,17 +593,17 @@ class MiniDocStringType:
 @dataclass
 class MiniDocStringArg:
     """
-    Represents a single argument in a Google-style Args: section.
+    Represents a single parameter entry from the Args: section of a function docstring.
 
     Attributes:
         name (str):
-            The name of the parameter.
+            The parameter name.
 
         pytype (MiniDocStringType):
-            The type hint provided in parentheses.
+            Parsed type hint from the parentheses.
 
         desc (str):
-            The full description (supports multiline).
+            The full description of the parameter, including multiline support.
     """
     name: str
     pytype: MiniDocStringType
@@ -610,7 +611,222 @@ class MiniDocStringArg:
 
 
 @dataclass
-class MiniDocString:
+class MiniDocStringAttribute:
+    """
+    Represents a single attribute entry from the Attributes: section of a class docstring.
+
+    Attributes:
+        name (str):
+            The attribute name.
+
+        pytype (str):
+            Type hint provided in parentheses, stored as a raw string.
+
+        desc (str):
+            The full description of the attribute, including multiline support.
+    """
+    name: str
+    pytype: str
+    desc: str
+
+
+T = TypeVar("T", MiniDocStringArg, MiniDocStringAttribute)
+
+
+@dataclass
+class MiniDocStringBase:
+    """
+    Base class containing shared parsing logic for function and class docstrings.
+    """
+
+    @staticmethod
+    def _split_docstring_description_from_sections(
+        doc: str,
+        section_names: list[str]
+    ) -> tuple[list[str], str]:
+        """
+        Splits a Google-style docstring into a description block and the remaining structured
+        sections.
+
+        This function extracts all lines of the initial free-text description that appear
+        before any of the specified section headers (e.g., "Args:", "Returns:", "Attributes:").
+        The matching is case-sensitive and anchored to the start of lines.
+
+        Args:
+            doc (str):
+                The full docstring to split.
+
+            section_names (list[str]):
+                A list of section headers to search for (e.g., ["Args:", "Attributes:"]).
+                The first occurrence of any of these headers marks the start of the structured part.
+
+        Returns:
+            tuple[list[str], str]:
+                A tuple containing:
+                - A list of lines forming the description block before the first matched section.
+                - The remaining docstring starting from the matched section header.
+
+        Example:
+            Given a docstring like:
+
+                \"\"\"
+                Brief summary.
+
+                Long description continues here.
+
+                Args:
+                    x (int): The input value.
+                \"\"\"
+
+            Calling `_split_docstring_sections(doc, ["Args:", "Returns:"])` will return:
+
+                (["Brief summary.", "", "Long description continues here."],
+                "Args:\\n    x (int): The input value.\\n")
+        """
+        pattern = r"(.*?)(?=^\s*(" + "|".join(re.escape(s) for s in section_names) + r"))"
+        match = re.search(pattern, doc, flags=re.MULTILINE | re.DOTALL)
+        if match:
+            lines = match[1].splitlines()
+            return lines, doc[match.end():]
+        else:
+            return doc.splitlines(), ""
+
+    @staticmethod
+    def _parse_description_block(lines: list[str]) -> tuple[str, str, str]:
+        """
+        Parses the free-text description block into short and detailed parts, and normalizes
+        indentation.
+
+        This function takes the lines from the description section (before any structured sections
+        like "Args:" or "Attributes:") and splits them into a short summary (typically the first
+        paragraph) and an optional detailed description (following paragraphs). It also determines
+        the indentation used on the first line to help normalize the rest of the docstring.
+
+        Args:
+            lines (list[str]):
+                The list of lines forming the description section, extracted before any structured
+                blocks.
+
+        Returns:
+            tuple[str, str, str]:
+                A tuple containing:
+                - The short description (first paragraph, ending at the first empty line)
+                - The detailed description (optional, following any blank line)
+                - The indentation prefix from the first line (used to normalize section parsing)
+
+        Raises:
+            ValueError:
+                If the list of lines is empty.
+
+        Example:
+            Input:
+                [
+                    "Short summary.",
+                    "",
+                    "Detailed description follows here.",
+                    "It may span multiple lines."
+                ]
+
+            Output:
+                (
+                    "Short summary.",
+                    "Detailed description follows here.\nIt may span multiple lines.",
+                    ""
+                )
+        """
+        if not lines:
+            raise ValueError("Missing description before structured section")
+
+        main_indent = cast(re.Match[str], re.match(r"^(\s*)", lines[0]))[1]
+        lines = [line[len(main_indent):].rstrip() for line in lines]
+
+        try:
+            i = lines.index("")
+            return (
+                "\n".join(lines[:i]),
+                "\n".join(lines[i+1:]).rstrip("\n"),
+                main_indent
+            )
+        except ValueError:
+            return "\n".join(lines), "", main_indent
+
+    @staticmethod
+    def _parse_args_or_attributes_block(block: str,
+                                        target_cls: type[T],
+                                        *,
+                                        main_indent: str) -> list[T]:
+        """
+        Parses an `Args:` or `Attributes:`-style block into structured entries.
+
+        This function expects lines in the form:
+
+            name (type): description
+
+        It supports multiline descriptions, using indentation to detect continuation lines.
+        This parser is specialized for Google-style `Args:` or `Attributes:` sections and assumes
+        that every entry begins with a declaration of a name and a type in parentheses.
+
+        Args:
+            block (str):
+                The raw content under the `Args:` or `Attributes:` section header.
+
+            target_cls (type[T]):
+                The class to instantiate for each parsed entry. Must accept
+                (name, type, description) as positional arguments.
+
+            main_indent (str):
+                The base indentation from the docstring. Used to de-indent continuation lines.
+
+        Returns:
+            list[T]:
+                A list of `target_cls` instances (e.g., `MiniDocStringArg` or 
+                `MiniDocStringAttribute`).
+
+        Raises:
+            AssertionError:
+                If a continuation line is encountered before any entry has been initialized.
+        """
+        lines = block.strip("\n").splitlines()
+        if not lines:
+            return []
+
+        tabulator = cast(re.Match[str], re.match(r"^(\s*)", lines[0]))[1]
+        lines = [line[len(tabulator):].rstrip() for line in lines]
+
+        current: T | None = None
+        buffer: list[str] = []
+        results: list[T] = []
+
+        for line in lines:
+            match = re.match(r"\s*(\w+)\s*\(([^)]+)\):\s*(.*)?", line)
+            if match:
+                if current is not None:
+                    current.desc = '\n'.join(buffer).strip("\n")
+                    results.append(current)
+
+                name, type_str, first_line = match.groups()
+                if target_cls is MiniDocStringArg:
+                    bld_arg = cast(Type[MiniDocStringArg], target_cls)
+                    current = cast(T, bld_arg(name, MiniDocStringType(type_str), ""))
+                else:
+                    assert target_cls is MiniDocStringAttribute
+                    bld_att = cast(Type[MiniDocStringAttribute], target_cls)
+                    current = cast(T, bld_att(name, type_str, ""))
+
+                buffer = [] if not first_line else [first_line]
+            else:
+                assert current is not None
+                buffer.append(line[len(tabulator) - len(main_indent):])
+
+        if current is not None:
+            current.desc = '\n'.join(buffer).strip("\n")
+            results.append(current)
+
+        return results
+
+
+@dataclass
+class MiniDocStringFunction(MiniDocStringBase):
     """
     Parses a Google-style docstring into structured components.
 
@@ -666,53 +882,19 @@ class MiniDocString:
         doc = docstring.strip("\n")
 
         # 1. Parse description section (up to Args/Returns/Raises)
-        g = re.search(r"(.*?)(?=^\s*(Args:|Returns:|Raises:))", doc, flags=re.MULTILINE | re.DOTALL)
-        if g:
-            lines = g[1].splitlines()
-            doc = doc[g.end():]  # remove what we've already parsed
-        else:
-            lines = doc.splitlines()
-            doc = ""
-
-        if not lines:
-            raise ValueError("Missing description before Args/Returns/Raises block")
-
-        main_indent = cast(re.Match[str], re.match(r"^(\s*)", lines[0]))[1]
-        lines = [line[len(main_indent):].rstrip() for line in lines]
-
-        try:
-            i = lines.index("")
-            self.description_short = "\n".join(lines[:i])
-            self.description_detailed = "\n".join(lines[i+1:]).rstrip("\n")
-        except ValueError:
-            self.description_short = "\n".join(lines)
+        lines, doc = self._split_docstring_description_from_sections(
+            doc,
+            ["Args:", "Returns:", "Raises:"]
+        )
+        self.description_short, self.description_detailed, main_indent = \
+            self._parse_description_block(lines)
 
         # 2. Parse Args section if present
         g = re.search(r"Args:(.*?)(?=\n\s*(Args:|Returns:|Raises:)|$)", doc, flags=re.DOTALL)
         if g:
-            args_block = g[1].strip("\n")
-            lines = args_block.splitlines()
-            tabulator = cast(re.Match[str], re.match(r"^(\s*)", lines[0]))[1]
-            lines = [line[len(tabulator):].rstrip() for line in lines]
-
-            current: MiniDocStringArg | None = None
-            buffer: list[str] = []
-
-            for line in lines:
-                match = re.match(r"\s*(\w+)\s*\(([^)]+)\):\s*(.*)?", line)
-                if match:
-                    if current is not None:
-                        current.desc = '\n'.join(buffer).strip("\n")
-                        self.args.append(current)
-                    current = MiniDocStringArg(match[1], MiniDocStringType(match[2]), "")
-                    buffer = [] if not match[3] else [match[3]]
-                else:
-                    assert current is not None
-                    buffer.append(line[len(tabulator) - len(main_indent):])
-
-            if current is not None:
-                current.desc = '\n'.join(buffer).strip("\n")
-                self.args.append(current)
+            self.args = self._parse_args_or_attributes_block(
+                g[1], MiniDocStringArg, main_indent=main_indent
+            )
 
         # 3. Parse Returns section if present
         g = re.search(r"Returns:(.*?)(?=\n\s*(Args:|Returns:|Raises:)|$)", doc, flags=re.DOTALL)
@@ -808,7 +990,7 @@ class MiniDocString:
 
     def to_schema_yaml(self, top_level_key: str, function_name: str) -> str:
         """
-        Serializes this MiniDocString into a general-purpose YAML schema format.
+        Serializes this MiniDocStringFunction into a general-purpose YAML schema format.
 
         Args:
             top_level_key (str):
@@ -852,3 +1034,94 @@ class MiniDocString:
             lines.append(f"    description: {_flatten(self.return_desc)}")
 
         return "\n".join(lines)
+
+
+class MiniDocString(MiniDocStringFunction):
+    """
+    DEPRECATED: Use `MiniDocStringFunction` instead.
+
+    This alias exists for backward compatibility and will be removed in a future version.
+    """
+
+    def __init__(self, docstring: str | None):
+        warnings.warn(
+            "'MiniDocString' is deprecated and will be removed in a future version. "
+            "Please use 'MiniDocStringFunction' instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        super().__init__(docstring)
+
+
+@dataclass
+class MiniDocStringClass(MiniDocStringBase):
+    """
+    Parses a Google-style docstring into structured components.
+
+    This mini parser extracts and stores structured information from a class's
+    docstring, including descriptions and attribute types.
+
+    Attributes:
+        _attribute_name_to_object (dict[str, MiniDocStringAttribute]):
+            Internal mapping of attribute names to their parsed representations.
+
+        description_short (str):
+            The first paragraph of the docstring, typically a one-line summary.
+
+        description_detailed (str):
+            Any additional description following the short summary, up to the
+            Attributes section.
+
+        attributes (list[MiniDocStringAttribute]):
+            A list of parsed attributes from the Attributes: section.
+    """
+    _attribute_name_to_object: dict[str, MiniDocStringAttribute]
+    description_short: str = ""
+    description_detailed: str = ""
+    attributes: list[MiniDocStringAttribute] = field(default_factory=list[MiniDocStringAttribute])
+
+    def __init__(self, docstring: str | None):
+        """
+        Initialize and parse a Google-style docstring of a class into structured sections.
+
+        Args:
+            docstring (str | None):
+                The raw docstring to parse. If None or empty, the parser initializes
+                with empty descriptions and no attributes.
+        """
+        self.description_short, self.description_detailed = "", ""
+        self.attributes = []
+
+        if not docstring:
+            return
+
+        doc = docstring.strip("\n")
+        lines, doc = self._split_docstring_description_from_sections(doc, ["Attributes:"])
+        self.description_short, self.description_detailed, main_indent = \
+            self._parse_description_block(lines)
+
+        g = re.search(r"Attributes:(.*?)(?=\n\s*\w+:|$)", doc, flags=re.DOTALL)
+        if g:
+            self.attributes = self._parse_args_or_attributes_block(
+                g[1], MiniDocStringAttribute, main_indent=main_indent
+            )
+
+        self._attribute_name_to_object = {a.name: a for a in self.attributes}
+
+    def get_attribute_by_name(self, name: str) -> MiniDocStringAttribute:
+        """
+        Retrieve the parsed attribute definition by its name.
+
+        Args:
+            name (str):
+                The name of the attribute to retrieve.
+
+        Returns:
+            MiniDocStringAttribute:
+                The parsed attribute object corresponding to the given name.
+
+        Raises:
+            KeyError:
+                If the argument name does not exist in the parsed docstring.
+        """
+        return self._attribute_name_to_object[name]

@@ -16,9 +16,8 @@ Shared core utilities for all `fifo-dev` repositories, under the `fifo_dev_commo
 This package is designed to support the `fifo-dev` ecosystem with minimal dependencies. It provides the following for runtime type checks and casting, docstring parsing, and LLM tool support:
 
 - `strict_cast()`: Runtime-enforced type casting.  
-- `class MiniDocString`: Lightweight implementation designed specifically to parse Google-style docstrings
-   and extract minimal, structured information for runtime type checking of inputs and outputs—ideal
-   for LLM-based function calling and agent execution, without requiring any third-party dependencies.
+- `class MiniDocStringFunction`: Lightweight parser for Google-style function docstrings. Extracts minimal structured information for runtime type checking of arguments and return values—useful for LLM-based function calling and agent execution without third-party dependencies.
+- `class MiniDocStringClass`: Lightweight parser for Google-style class docstrings. Extracts the short and detailed description along with a list of declared `Attributes:` as raw name/type/description triples.
 - `class ReadOnlyList`: Immutable wrapper for list-like data.  
 - `@tool_handler` / `@tool_query_source`: Decorators for defining tools and query sources in LLM-based agents.
 - `class FifoEvent`: Base class for binary-serializable events, with factory deserialization and class registration for cross-system use.
@@ -84,13 +83,19 @@ Raises `TypeError` if the value does not match the expected type(s).
 
 ### `fifo_dev_common.introspection.mini_docstring`
 
-Provides the `MiniDocString` class for parsing Google-style docstrings into structured form.  
+Provides the `MiniDocStringFunction` and `MiniDocStringClass` classes for parsing Google-style docstrings into structured form.  
 Includes:
 
-- Argument type extraction (`MiniDocStringArg`)
-- Return and raise parsing
-- Runtime type validation
-- Export to YAML schema for structured function calls
+- `MiniDocStringFunction`:
+  - Description parsing (short + detailed)
+  - Argument type extraction from `Args:` sections (`MiniDocStringArg`)
+  - Return and raise parsing
+  - Runtime type validation
+  - Export to YAML schema for structured function calls
+
+- `MiniDocStringClass`:
+  - Description parsing (short + detailed)
+  - Attribute extraction from `Attributes:` sections (`MiniDocStringAttribute`)
 
 ---
 
@@ -195,7 +200,7 @@ except TypeError as e:
 ### `fifo_dev_common.introspection.mini_docstring` example
 
 ```python
-from fifo_dev_common.introspection.mini_docstring import MiniDocString
+from fifo_dev_common.introspection.mini_docstring import MiniDocStringFunction
 
 doc = """
 Brief summary.
@@ -211,7 +216,7 @@ Returns:
         The task description in serialized format.
 """
 
-parsed = MiniDocString(doc)
+parsed = MiniDocStringFunction(doc)
 assert parsed.get_arg_by_name("task_id").pytype.to_string() == "int"
 assert parsed.return_desc == "The task description in serialized format."
 

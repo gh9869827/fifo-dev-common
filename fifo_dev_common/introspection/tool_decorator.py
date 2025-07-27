@@ -12,19 +12,19 @@ Decorated functions expose `tool_name`, `tool_docstring`, and structured format 
 import re
 from textwrap import indent
 from typing import Protocol, runtime_checkable, Callable, cast, Any
-from fifo_dev_common.introspection.mini_docstring import MiniDocString
+from fifo_dev_common.introspection.mini_docstring import MiniDocStringFunction
 
 @runtime_checkable
 class ToolHandler(Protocol):
-    tool_docstring: MiniDocString
+    tool_docstring: MiniDocStringFunction
     tool_name: str
     def to_schema_yaml(self) -> str: ...
     def __call__(self, **kwargs: Any) -> Any: ...
 
 def tool_handler(name: str) -> Callable[[Callable[..., Any]], ToolHandler]:
     """
-    Decorator to annotate a callable tool with a `MiniDocString` and a logical tool name, used as a
-    unique identifier in schemas or execution plans.
+    Decorator to annotate a callable tool with a `MiniDocStringFunction` and a logical tool name,
+    used as a unique identifier in schemas or execution plans.
 
     This attaches three attributes to the target function:
       - `tool_name`: a string identifier used for naming or routing
@@ -44,7 +44,7 @@ def tool_handler(name: str) -> Callable[[Callable[..., Any]], ToolHandler]:
 
         # Attach metadata
         setattr(tool, "tool_name", name)
-        setattr(tool, "tool_docstring", MiniDocString(fn.__doc__))
+        setattr(tool, "tool_docstring", MiniDocStringFunction(fn.__doc__))
 
         def to_schema_yaml() -> str:
             return tool.tool_docstring.to_schema_yaml("intent", tool.tool_name)
@@ -58,7 +58,7 @@ def tool_handler(name: str) -> Callable[[Callable[..., Any]], ToolHandler]:
 
 @runtime_checkable
 class ToolQuerySource(Protocol):
-    source_docstring: MiniDocString
+    source_docstring: MiniDocStringFunction
     source_name: str
     def get_description(self) -> str: ...
     def __call__(self, **kwargs: Any) -> Any: ...
@@ -67,7 +67,8 @@ _ALLOWED_PREFIXES = ("Returns", "Provides", "Gets", "Fetches", "Supplies")
 
 def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySource]:
     """
-    Decorator to annotate a callable tool query source with a MiniDocString and a logical tool name.
+    Decorator to annotate a callable tool query source with a MiniDocStringFunction and a logical
+    tool name.
 
     This attaches three attributes to the target function:
       - `source_name`: a string identifier used for naming or routing
@@ -92,7 +93,7 @@ def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySo
 
         # Attach metadata
         setattr(tool, "source_name", name)
-        setattr(tool, "source_docstring", MiniDocString(fn.__doc__))
+        setattr(tool, "source_docstring", MiniDocStringFunction(fn.__doc__))
 
         def _clean_summary_for_prompt(summary: str) -> str:
             match = re.match(

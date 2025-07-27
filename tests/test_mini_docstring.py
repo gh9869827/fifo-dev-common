@@ -1,7 +1,7 @@
 from typing import Any
 import pytest
 from fifo_dev_common.introspection.mini_docstring import (
-    MiniDocString,
+    MiniDocStringFunction,
     MiniDocStringArg,
     MiniDocStringType,
     _match_closing_quote,  # pyright: ignore[reportPrivateUsage]  # pylint: disable=protected-access
@@ -21,7 +21,7 @@ def test_parses_short_and_detailed_description():
         x (int):
             A number to use
     """
-    mds = MiniDocString(doc)
+    mds = MiniDocStringFunction(doc)
     assert mds.description_short == "Short description."
     assert mds.description_detailed == "This function does something useful.\n2nd description line."
 
@@ -36,8 +36,8 @@ def test_parses_args_section_without_description():
         y (Optional[str]):
             Second one, optional
     """
-    with pytest.raises(ValueError, match="description.*before.*Args"):
-        MiniDocString(doc_missing_desc)
+    with pytest.raises(ValueError, match="description.*before.*structured"):
+        MiniDocStringFunction(doc_missing_desc)
 
 
 def test_parses_args_section_with_description():
@@ -51,7 +51,7 @@ def test_parses_args_section_with_description():
         y (Optional[str]):
             Second one, optional
     """
-    mds = MiniDocString(doc_with_desc)
+    mds = MiniDocStringFunction(doc_with_desc)
     assert len(mds.args) == 2
     assert mds.args[0].name == "x"
     assert mds.args[0].pytype.to_string() == "int"
@@ -65,8 +65,8 @@ def test_parses_returns_section_without_description():
         str:
             A message
     """
-    with pytest.raises(ValueError, match="description.*before.*Returns"):
-        MiniDocString(doc_missing_desc)
+    with pytest.raises(ValueError, match="description.*before.*structured"):
+        MiniDocStringFunction(doc_missing_desc)
 
 
 def test_parses_returns_section_with_description():
@@ -78,7 +78,7 @@ def test_parses_returns_section_with_description():
         str:
             A message
     """
-    mds = MiniDocString(doc_with_desc)
+    mds = MiniDocStringFunction(doc_with_desc)
     assert mds.return_type is not None
     assert mds.return_type.to_string() == "str"
     assert mds.return_desc is not None and mds.return_desc == "A message"
@@ -90,8 +90,8 @@ def test_parses_raises_section_without_description():
     Raises:
         ValueError: if the input is invalid
     """
-    with pytest.raises(ValueError, match="description.*before.*Raises"):
-        MiniDocString(doc_missing_desc)
+    with pytest.raises(ValueError, match="description.*before.*structured"):
+        MiniDocStringFunction(doc_missing_desc)
 
 
 def test_parses_raises_section_with_description():
@@ -102,7 +102,7 @@ def test_parses_raises_section_with_description():
     Raises:
         ValueError: if the input is invalid
     """
-    mds = MiniDocString(doc_with_desc)
+    mds = MiniDocStringFunction(doc_with_desc)
     assert mds.raises is not None and mds.raises == "ValueError: if the input is invalid"
 
 
@@ -114,7 +114,7 @@ def test_get_arg_by_name():
         foo (int):
             an argument
     """
-    mds = MiniDocString(doc)
+    mds = MiniDocStringFunction(doc)
     arg = mds.get_arg_by_name("foo")
     assert isinstance(arg, MiniDocStringArg)
     assert arg.name == "foo"
@@ -131,7 +131,7 @@ def test_validate_runtime_args_valid():
         b (Optional[list[str]]):
             optional list
     """
-    mds = MiniDocString(doc)
+    mds = MiniDocStringFunction(doc)
     mds.validate_runtime_args({"a": 123, "b": ["x", "y"]})
 
 
@@ -145,7 +145,7 @@ def test_validate_runtime_args_missing():
         b (str):
             required
     """
-    mds = MiniDocString(doc)
+    mds = MiniDocStringFunction(doc)
     with pytest.raises(ValueError, match="Missing required arguments"):
         mds.validate_runtime_args({"a": 1})
 
@@ -158,7 +158,7 @@ def test_validate_runtime_args_extra():
         a (int):
             required
     """
-    mds = MiniDocString(doc)
+    mds = MiniDocStringFunction(doc)
     with pytest.raises(ValueError, match="Unexpected arguments"):
         mds.validate_runtime_args({"a": 1, "extra": 42})
 
@@ -171,7 +171,7 @@ def test_validate_runtime_args_type_mismatch():
         a (int):
             required
     """
-    mds = MiniDocString(doc)
+    mds = MiniDocStringFunction(doc)
     with pytest.raises(ValueError, match="expected .*int.* got str"):
         mds.validate_runtime_args({"a": "not an int"})
 
@@ -193,7 +193,7 @@ def test_to_schema_yaml_structure():
         str:
             confirmation
     """
-    mds = MiniDocString(doc)
+    mds = MiniDocStringFunction(doc)
     yaml = mds.to_schema_yaml("function", "my_func")
 
     assert yaml == \

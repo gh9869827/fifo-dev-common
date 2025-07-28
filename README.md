@@ -38,7 +38,6 @@ See the [Example Usage](#-example-usage) section below for how these functions, 
   - [socket_utils](#fifo_dev_commonsocketsocket_utils)
   - [fifo_serialization](#fifo_dev_commonserializationfifo_serialization)
   - [fifo_event](#fifo_dev_commoneventfifo_event)
-- [✅ Example Usage](#-example-usage)
 - [🧪 Tests](#-tests)
 - [📄 License](#-license)
 
@@ -79,6 +78,24 @@ Defines `strict_cast(tp, value)` — a runtime-enforced version of `typing.cast(
 Raises `TypeError` if the value does not match the expected type(s).  
 **Shallow check**: only verifies the outermost type (e.g., `list`, not `list[int]`).
 
+**Examples:**
+
+```python
+from fifo_dev_common.typeutils.strict_cast import strict_cast
+
+# Valid cast: the value matches the expected type (int)
+value = strict_cast(int, 42)
+
+# Attempting to cast a value of the wrong type (str instead of int)
+# This demonstrates how strict_cast raises a TypeError on mismatch
+try:
+    value = strict_cast(int, "42")
+except TypeError as e:
+    print(e)
+    # Output:
+    # TypeError: strict_cast failed: expected int, got str
+```
+
 ---
 
 ### `fifo_dev_common.introspection.mini_docstring`
@@ -97,6 +114,77 @@ Includes:
   - Description parsing (short + detailed)
   - Attribute extraction from `Attributes:` sections (`MiniDocStringAttribute`)
 
+**Examples:**
+
+```python
+from fifo_dev_common.introspection.mini_docstring import MiniDocStringFunction
+
+def move_to(x: int, y: int) -> str:
+    """
+    Move the robot to an (x, y) position in millimeters.
+
+    This function generates a movement command that instructs the robot to move 
+    to a specific location on a 2D surface. Coordinates are given in millimeters 
+    relative to the robot's current workspace origin.
+
+    Args:
+        x (int):
+            The target X position in millimeters.
+        y (int):
+            The target Y position in millimeters.
+
+    Returns:
+        str:
+            A confirmation string like "Moving to (100, 200)".
+    """
+    return f"Moving to ({x}, {y})"
+
+
+# Create a `MiniDocStringFunction` object to parse the docstring
+parsed = MiniDocStringFunction(move_to.__doc__)
+
+# Access the parsed types
+print(parsed.get_arg_by_name("x").pytype.to_string())   # Output: int
+print(parsed.get_arg_by_name("y").pytype.to_string())   # Output: int
+assert parsed.return_type is not None
+print(parsed.return_type.to_string())                   # Output: str
+
+# Access descriptions
+print(parsed.description_short)    # Output: Move the robot to an (x, y) position in millimeters.
+print(parsed.description_detailed) # Output: This function generates a movement command ...
+
+# Access return description
+print(parsed.return_desc)          # Output: A confirmation string like "Moving to (100, 200)".
+
+# ✅ Runtime validation: correct types
+parsed.validate_runtime_args({
+    "x": 100,
+    "y": 200
+})
+# Should succeed silently
+
+# ❌ Type mismatch: 'x' is a string, not an int
+try:
+    parsed.validate_runtime_args({
+        "x": "100",
+        "y": 200
+    })
+except ValueError as e:
+    print(e)
+    # Output: Argument 'x' expected ArgType(int), but got str
+
+# ❌ Unexpected extra argument
+try:
+    parsed.validate_runtime_args({
+        "x": 100,
+        "y": 200,
+        "speed": 50
+    })
+except ValueError as e:
+    print(e)
+    # Output: Unexpected arguments: speed
+```
+
 ---
 
 ### `fifo_dev_common.containers.read_only.read_only_list`
@@ -106,6 +194,66 @@ Supports indexing, iteration, equality, and containment.
 
 > ⚠️ Inner objects (like nested lists/dicts) are not automatically frozen.  
 > For example, `ReadOnlyList([{"x": 1}])[0]["x"] = 2` is still allowed.
+
+**Examples:**
+
+```python
+from fifo_dev_common.containers.read_only.read_only_list import ReadOnlyList
+
+# Create a simple read-only list
+items = ReadOnlyList([1, 2, 3])
+
+# Read access works like a regular list
+print(items[0])  # Output: 1
+
+# Attempting to modify the list raises an error
+try:
+    # This will raise TypeError because ReadOnlyList is immutable
+    # Linters also report a warning in the editor:
+    #   - Pylance warning: "__setitem__" method not defined on type "ReadOnlyList[int]"
+    #   - Pylint warning: 'items' does not support item assignment
+    items[0] = 2
+except TypeError as e:
+    print("Top-level modification error:", e)
+
+# Wrap inner lists with ReadOnlyList to enforce nested immutability
+nested = ReadOnlyList([
+    ReadOnlyList([1, 2]),
+    ReadOnlyList([3, 4])
+])
+
+# Attempting to modify the top-level nested list raises an error
+try:
+    # This will raise TypeError because ReadOnlyList is immutable
+    # Linters also report a warning in the editor
+    nested[0] = [9, 9]
+except TypeError as e:
+    print("Nested top-level modification error:", e)
+
+# Attempting to modify the inner list also raises an error
+try:
+    # This will raise TypeError because the inner ReadOnlyList is also immutable
+    # Linters also report a warning in the editor
+    nested[0][0] = 99
+except TypeError as e:
+    print("Nested inner modification error:", e)
+
+# Create a ReadOnlyList containing a mutable inner list (not wrapped)
+shallow = ReadOnlyList([
+    [1, 2],  # This is a regular list, still mutable
+    [3, 4]
+])
+
+# Modifying the outer list will raise a TypeError
+try:
+    shallow[0] = [9, 9]
+except TypeError as e:
+    print("Shallow top-level modification error:", e)
+
+# But modifying the inner list itself works — ReadOnlyList perform a shallow check
+shallow[0][0] = 99
+print("Modified shallow inner list:", shallow[0])  # Output: [99, 2]
+```
 
 ---
 
@@ -117,6 +265,42 @@ Decorators to define tools and runtime query sources callable by large language 
 - `@tool_query_source(name)`: Define a no-arg runtime data source that provides context for LLM execution planning.
 
 These attach structured metadata derived from docstrings—enabling parsing, validation, and schema generation for transparent agent planning and execution.
+
+**Examples:**
+
+```python
+from fifo_dev_common.introspection.tool_decorator import tool_handler
+
+@tool_handler("describe_task")
+def describe_task(task_id: int) -> str:
+    """
+    Describe the task based on its ID.
+
+    Args:
+        task_id (int): 
+            ID to fetch
+
+    Returns:
+        str:
+            Description
+    """
+    return f"Task #{task_id}"
+
+# Convert the function metadata into structured schema (YAML format)
+print(describe_task.to_schema_yaml())
+
+# Output:
+# - intent: describe_task
+#   description: Describe the task based on its ID.
+#   parameters:
+#     - name: task_id
+#       type: int
+#       description: ID to fetch
+#       optional: False
+#   return:
+#     type: str
+#     description: Description
+```
 
 ---
 
@@ -130,6 +314,42 @@ Also provides two runtime-checkable protocols for socket abstraction:
 - `SupportsSendAll`: defines `sendall(data, flags=...)`
 
 These allow code to accept real sockets or compatible mock objects without relying on concrete types.
+
+**Examples:**
+
+```bash
+import socket
+from fifo_dev_common.socket.socket_utils import recv_all, SupportsRecvInto
+
+# Create a pair of connected sockets for local communication
+sock_server, sock_client = socket.socketpair()
+
+# Send 6 bytes from one end
+sock_client.sendall(b"ABCDEF")
+
+# Receive exactly 6 bytes from the other end using recv_all()
+data = recv_all(sock_server, 6)
+print(data)
+# Output: b'ABCDEF'
+
+# Define a function that accepts any object supporting recv_into()
+def read_exact(sock: SupportsRecvInto, size: int) -> bytes:
+    """
+    Receive exactly `size` bytes from any object implementing recv_into().
+    Useful for both real sockets and mocks during testing.
+    """
+    return recv_all(sock, size)
+
+# Demonstrate using it with a real socket:
+sock_client.sendall(b"GHIJKL")
+result = read_exact(sock_server, 6)
+print(result)
+# Output: b'GHIJKL'
+
+# Cleanup
+sock_server.close()
+sock_client.close()
+```
 
 ---
 
@@ -163,6 +383,96 @@ Provides a lightweight, efficient binary serialization framework for Python data
 **Note:** Primitive format codes `b B h H i I l L q Q e f d` follow the [Python `struct` module](https://docs.python.org/3/library/struct.html).  
 `y` is a special format for booleans, serialized as a single byte (`0` for `False`, `1` for `True`).
 
+**Examples:**
+
+```python
+from dataclasses import dataclass, field
+import socket
+from typing import List
+from fifo_dev_common.serialization.fifo_serialization import FifoSerializable, serializable
+
+# Define a serializable dataclass for a single sensor reading.
+# The temperature and humidity fields are both floats, which means we use the format string 'f'.
+@serializable
+@dataclass
+class SensorReadings(FifoSerializable):
+    temperature: float = field(metadata={"format": "f"})
+    humidity: float = field(metadata={"format": "f"})
+
+# Define a serializable dataclass for an array of sensor readings.
+# `readings` is a list of `SensorReadings` objects. Since it's a list, we use the format string 
+# `[]`. The `_` inside the brackets indicates that each item is a serializable object.
+# We also set the `ptype` metadata attribute to `SensorReadings` so that each item can be properly
+# instantiated during deserialization.
+@serializable
+@dataclass
+class SensorArray(FifoSerializable):
+    readings: List[SensorReadings] = field(metadata={"format": "[_]", "ptype": SensorReadings})
+
+# Create some example sensor readings.
+s1 = SensorReadings(temperature=22.5, humidity=40.0)
+s2 = SensorReadings(temperature=23.0, humidity=38.5)
+sensor_data = SensorArray(readings=[s1, s2])
+
+# Allocate a buffer of the correct size and serialize the data into it.
+buffer = bytearray(sensor_data.serialized_byte_size())
+sensor_data.serialize_to_bytes(buffer, 0)
+
+# Deserialize the data back from the buffer.
+deserialized, _ = SensorArray.deserialize_from_bytes(buffer, 0)
+
+
+# Display the deserialized data to confirm it matches the original
+print(f"Number of readings: {len(deserialized.readings)}")                   # Output=2
+print(f"First reading temperature: {deserialized.readings[0].temperature}")  # Output=22.5
+print(f"Second reading humidity: {deserialized.readings[1].humidity}")       # Output=38.5
+
+# This object can also be sent over a socket using the built-in serialization methods.
+
+# Create a pair of connected sockets for local communication
+sock_server, sock_client = socket.socketpair()
+
+# Serialize the object and send it over the socket
+sensor_data.serialize_to_socket(sock_client)
+
+# Deserialize the object from the receiving socket
+deserialized_socket = SensorArray.deserialize_from_socket(sock_server)
+
+# Display the deserialized data to confirm it matches the original
+print(f"Number of readings: {len(deserialized_socket.readings)}")                   # Output=2
+print(f"First reading temperature: {deserialized_socket.readings[0].temperature}")  # Output=22.5
+print(f"Second reading humidity: {deserialized_socket.readings[1].humidity}")       # Output=38.5
+
+# Clean up the sockets
+sock_server.close()
+sock_client.close()
+```
+
+```python
+# Example with optional (nullable) elements in the array.
+# `readings` is similar to the previous example, but each element in the list may be None.
+# We use `[?_]` as the format string:
+# - `[]` indicates a list,
+# - `_` indicates the element type is a serializable object,
+# - `?` means each element is optional (can be None).
+@serializable
+@dataclass
+class MaybeSensorArray(FifoSerializable):
+    readings: List[SensorReadings | None] = field(metadata={"format": "[?_]", "ptype": SensorReadings})
+
+# Create an array with one reading and one None
+data = MaybeSensorArray(readings=[s1, None])
+buf = bytearray(data.serialized_byte_size())
+data.serialize_to_bytes(buf, 0)
+
+# Deserialize and check that the None is preserved
+restored, _ = MaybeSensorArray.deserialize_from_bytes(buf, 0)
+
+# Display the result
+print(f"Restored[0] is None? {restored.readings[0] is None}")  # Output=False
+print(f"Restored[1] is None? {restored.readings[1] is None}")  # Output=True
+```
+
 ---
 
 ### `fifo_dev_common.event.fifo_event`
@@ -178,178 +488,7 @@ Defines the `FifoEvent` base class for priority-aware, factory-registered event 
   - Automatically serializing the event header (event ID) alongside the payload (which includes priority).
 - Designed for efficient, compact event exchange in embedded and distributed systems.
 
----
-
-## ✅ Example Usage
-
-### `fifo_dev_common.typeutils.strict_cast` example
-
-```python
-from fifo_dev_common.typeutils.strict_cast import strict_cast
-
-value = strict_cast(int, 42)
-
-try:
-    value = strict_cast(int, "42")
-except TypeError as e:
-    print(e)
-    # Output:
-    # TypeError: strict_cast failed: expected int, got str
-```
-
-### `fifo_dev_common.introspection.mini_docstring` example
-
-```python
-from fifo_dev_common.introspection.mini_docstring import MiniDocStringFunction
-
-doc = """
-Brief summary.
-
-Args:
-    task_id (int):
-        Unique identifier for the task.
-    tags (list[str]):
-        List of tags. Can be empty.
-
-Returns:
-    str:
-        The task description in serialized format.
-"""
-
-parsed = MiniDocStringFunction(doc)
-assert parsed.get_arg_by_name("task_id").pytype.to_string() == "int"
-assert parsed.return_desc == "The task description in serialized format."
-
-parsed.validate_runtime_args({
-    "task_id": 42,
-    "tags": ["tag1", "tag2", "tag3"]
-})
-# Validation completes successfully
-
-try:
-    parsed.validate_runtime_args({
-        "task_id": 42,
-        "tags": [1, 2, 3]
-    })
-except ValueError as e:
-    print(e)
-    # Output:
-    # ValueError: Argument 'tags' expected ArgType(list[str]), but got list
-
-try:
-    parsed.validate_runtime_args({
-        "task_id": 42,
-        "tags": ["tag1", "tag2", "tag3"],
-        "extra_args": "extra_value"
-    })
-except ValueError as e:
-    print(e)
-    # Output:
-    # Unexpected arguments: extra_args
-```
-
-### `fifo_dev_common.containers.read_only.read_only_list` example
-
-```python
-from fifo_dev_common.containers.read_only.read_only_list import ReadOnlyList
-
-
-items = ReadOnlyList([1, 2, 3])
-print(items[0])
-# Output:
-# 1
-
-try:
-    # Pylance warning: "__setitem__" method not defined on type "ReadOnlyList[int]"
-    # Pylint warning: 'items' does not support item assignment
-    items[0] = 2
-except TypeError as e:
-    print(e)
-    # Output:
-    # TypeError: 'ReadOnlyList' object does not support item assignment
-```
-### `fifo_dev_common.introspection.tool_decorator` example
-
-```python
-from fifo_dev_common.introspection.tool_decorator import tool_handler
-
-@tool_handler("describe_task")
-def describe_task(task_id: int) -> str:
-    """
-    Describe the task based on its ID.
-
-    Args:
-        task_id (int): 
-            ID to fetch
-
-    Returns:
-        str:
-            Description
-    """
-    return f"Task #{task_id}"
-
-print(describe_task.to_schema_yaml())
-# Output:
-# - intent: describe_task
-#   description: Describe the task based on its ID.
-#   parameters:
-#     - name: task_id
-#       type: int
-#       description: ID to fetch
-#       optional: False
-#   return:
-#     type: str
-#     description: Description
-```
-
-### `fifo_dev_common.serialization.fifo_serialization` example
-
-```python
-from dataclasses import dataclass, field
-from typing import List
-from fifo_dev_common.serialization.fifo_serialization import FifoSerializable, serializable
-
-@serializable
-@dataclass
-class SensorReadings(FifoSerializable):
-    temperature: float = field(metadata={"format": "f"})
-    humidity: float = field(metadata={"format": "f"})
-
-@serializable
-@dataclass
-class SensorArray(FifoSerializable):
-    readings: List[SensorReadings] = field(metadata={"format": "[_]", "ptype": SensorReadings})
-
-# Usage
-s1 = SensorReadings(temperature=22.5, humidity=40.0)
-s2 = SensorReadings(temperature=23.0, humidity=38.5)
-sensor_data = SensorArray(readings=[s1, s2])
-
-buffer = bytearray(sensor_data.serialized_byte_size())
-sensor_data.serialize_to_bytes(buffer, 0)
-
-deserialized, _ = SensorArray.deserialize_from_bytes(buffer, 0)
-assert len(deserialized.readings) == 2
-assert abs(deserialized.readings[0].temperature - 22.5) < 1e-6
-assert abs(deserialized.readings[1].humidity - 38.5) < 1e-6
-```
-
-```python
-@serializable
-@dataclass
-class MaybeSensorArray(FifoSerializable):
-    readings: List[SensorReadings | None] = field(metadata={"format": "[?_]", "ptype": SensorReadings})
-
-data = MaybeSensorArray(readings=[s1, None])
-buf = bytearray(data.serialized_byte_size())
-data.serialize_to_bytes(buf, 0)
-restored, _ = MaybeSensorArray.deserialize_from_bytes(buf, 0)
-assert restored.readings[0] is not None
-assert restored.readings[1] is None
-```
-
-
-### `fifo_dev_common.event.fifo_event` example
+**Examples:**
 
 ```python
 from dataclasses import dataclass, field
@@ -358,45 +497,59 @@ from typing import ClassVar
 
 from fifo_dev_common.event.fifo_event import FifoEvent, serializable
 
+# Define an enum for event states.
 class State(IntEnum):
     INIT = 1
     RUN = 2
     DONE = 3
 
+# Define a serializable dataclass representing a 2D point.
 @serializable
 @dataclass
 class Point:
     x: int = field(metadata={"format": "i"})
     y: int = field(metadata={"format": "i"})
 
+# Define a serializable event class and register it with FifoEvent.
 @FifoEvent.register
 @serializable
 @dataclass(kw_only=True)
 class DemoEvent(FifoEvent):
+    # These are class-level constants and not serialized.
     event_id: ClassVar[int] = 99
     default_priority: ClassVar[int] = 3
 
+    # Instance fields that are serialized.
     score: int = field(metadata={"format": "i"})
     state: State = field(metadata={"format": "E<B>", "ptype": State})
     position: Point = field(metadata={"ptype": Point})
 
     def __init__(self, score: int, state: State, position: Point, priority: int = -1):
+        # Initialize the base event (sets priority).
         super().__init__(priority=priority)
         self.score = score
         self.state = state
         self.position = position
 
-# Usage example:
+# Example usage:
+
+# Create an event instance.
 evt = DemoEvent(score=42, state=State.RUN, position=Point(7, 8), priority=77)
 
+# Serialize the event to a byte array.
 blob = evt.to_bytes()
 
+# Deserialize the event from bytes using the event registry.
 restored = FifoEvent.from_bytes(blob)
+
+# Verify instance and cast for the linters
 assert isinstance(restored, DemoEvent)
-assert restored.score == 42
-assert restored.state == State.RUN
-assert restored.position == Point(7, 8)
-assert restored.priority == 77
+
+# Display the deserialized event to confirm it matches the original
+print(f"Score: {restored.score}")                                         # Output=42
+print(f"State: {restored.state.name}")                                    # Output=RUN
+print(f"Position: ({restored.position.x}, {restored.position.y})")        # Output=(7, 8)
+print(f"Priority: {restored.priority}")                                   # Output=77
 ```
 
 ---

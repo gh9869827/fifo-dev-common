@@ -22,8 +22,6 @@ This package is designed to support the `fifo-dev` ecosystem with minimal depend
 - `@tool_handler` / `@tool_query_source`: Decorators for defining tools and query sources in LLM-based agents.
 - `class FifoEvent`: Base class for binary-serializable events, with factory deserialization and class registration for cross-system use.
 
-See the [Example Usage](#-example-usage) section below for how these functions, classes, and decorators can be used.
-
 ---
 
 ## 📚 Table of Contents

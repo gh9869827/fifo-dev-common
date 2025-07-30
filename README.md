@@ -13,13 +13,16 @@ Features, APIs, and behavior are subject to change or removal at any time.
 
 Shared core utilities for all `fifo-dev` repositories, under the `fifo_dev_common` namespace.
 
-This package is designed to support the `fifo-dev` ecosystem with minimal dependencies. It provides the following for runtime type checks and casting, docstring parsing, and LLM tool support:
+This package is designed to support the `fifo-dev` ecosystem with minimal dependencies.  
+It provides the following for runtime type checks and casting, docstring parsing, LLM tool support, serialization, and socket utilities:
 
 - `strict_cast()`: Runtime-enforced type casting.  
 - `class MiniDocStringFunction`: Lightweight parser for Google-style function docstrings. Extracts minimal structured information for runtime type checking of arguments and return values—useful for LLM-based function calling and agent execution without third-party dependencies.
 - `class MiniDocStringClass`: Lightweight parser for Google-style class docstrings. Extracts the short and detailed description along with a list of declared `Attributes:` as raw name/type/description triples.
 - `class ReadOnlyList`: Immutable wrapper for list-like data.  
 - `@tool_handler` / `@tool_query_source`: Decorators for defining tools and query sources in LLM-based agents.
+- `@serializable` decorator and `FifoSerializable` base class: Efficient binary serialization and deserialization for dataclasses, supporting primitives, enums, optional fields, arrays, and nested objects.
+- `recv_all(sock, n)`: Efficiently receive exactly `n` bytes from a socket-like object supporting `recv_into()`.
 - `class FifoEvent`: Base class for binary-serializable events, with factory deserialization and class registration for cross-system use.
 
 ---

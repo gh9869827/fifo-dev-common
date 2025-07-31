@@ -7,12 +7,16 @@ from threading import Thread
 from multiprocessing import Process
 from typing import TYPE_CHECKING
 from fifo_dev_common.event.fifo_event import FifoEventPoison, FifoEvent
+from fifo_dev_common.logging.logger import get_logger
 
 
 if TYPE_CHECKING:
     from multiprocessing.queues import Queue  # pragma: nocover
 else:
     from multiprocessing import Queue
+
+
+logger = get_logger(__name__)
 
 
 class FifoProcessWorkerBase(ABC):
@@ -644,6 +648,7 @@ class FifoProcessManager:
         This launches the worker process and starts the threads that transfer events in both 
         directions between the main process and the worker process.
         """
+        logger.trace("[PROCESS:MAIN] Start the worker process and the communication threads")
         self._proc.start()
         self._pusher_thread.start()
         self._puller_thread.start()
@@ -655,12 +660,15 @@ class FifoProcessManager:
         Sends a poison event to the worker process and waits until the poison event is received
         back from the worker, indicating shutdown is complete.
         """
+        logger.trace("[PROCESS:MAIN] Sent `FifoEventPoison` to request shutdown")
         await self._async_in.put(FifoEventPoison())
 
+        logger.trace("[PROCESS:MAIN] Awaiting worker confirmation...")
         while True:
             event: FifoEvent = await self._async_out.get()
             if isinstance(event, FifoEventPoison):
                 break
+        logger.trace("[PROCESS:MAIN] Received `FifoEventPoison` confirmation from worker")
 
     def join(self) -> None:
         """

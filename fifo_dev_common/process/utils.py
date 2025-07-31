@@ -6,7 +6,11 @@ import queue
 from threading import Thread
 from multiprocessing import Process
 from typing import TYPE_CHECKING
-from fifo_dev_common.event.fifo_event import FifoEventPoison, FifoEvent
+from fifo_dev_common.event.fifo_event import (
+    FifoEventPoison,
+    FifoEvent,
+    FifoEventException,
+)
 from fifo_dev_common.logging.logger import get_logger
 
 
@@ -315,7 +319,13 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
                 _trace("[FifoAsyncProcessWorker.fct:_process_loop] Poison event processed; shutting down event loop")  # pylint: disable=line-too-long
                 break
 
-            await self._callback.loop(event, self._async_in.qsize(), self._async_out)
+            try:
+                await self._callback.loop(event, self._async_in.qsize(), self._async_out)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.error("[FifoAsyncProcessWorker.loop] Unhandled exception")
+                await self._async_out.put(
+                    FifoEventException(exception=e, source="FifoAsyncProcessWorker.loop")
+                )
 
         # need to wait for the pusher thread to complete so that we exit the loop process
         # only when no more asyncio operation are processing or pending
@@ -333,7 +343,13 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
 
-        self._callback.initialize()
+        try:
+            self._callback.initialize()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.error("[FifoAsyncProcessWorker.initialize] Unhandled exception")
+            self._out_queue.put(
+                FifoEventException(exception=e, source="FifoAsyncProcessWorker.initialize")
+            )
 
         puller_thread = threading.Thread(target=self._in_queue_puller)
         pusher_thread = threading.Thread(target=self._out_queue_pusher)
@@ -347,7 +363,13 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         pusher_thread.join()
         _trace("[FifoAsyncProcessWorker.fct:run_until_complete] _out_queue_pusher thread joined")
 
-        self._callback.finalize()
+        try:
+            self._callback.finalize()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.error("[FifoAsyncProcessWorker.finalize] Unhandled exception")
+            self._out_queue.put(
+                FifoEventException(exception=e, source="FifoAsyncProcessWorker.finalize")
+            )
         _trace("[FifoAsyncProcessWorker.fct:run_until_complete] Callback finalized")
         _trace("[FifoAsyncProcessWorker.fct:run_until_complete] Async worker shutdown complete")
 
@@ -531,7 +553,13 @@ class FifoSyncProcessWorker:
                 self._out_queue.put(event)
                 _trace("[FifoSyncProcessWorker.thread:_priority_event_processor] Poison event processed; stopping thread")  # pylint: disable=line-too-long
                 break
-            self._callback.process_event(event, self._local_priority_queue.qsize(), self._out_queue)
+            try:
+                self._callback.process_event(event, self._local_priority_queue.qsize(), self._out_queue)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.error("[FifoSyncProcessWorker.process_event] Unhandled exception")
+                self._out_queue.put(
+                    FifoEventException(exception=e, source="FifoSyncProcessWorker.process_event")
+                )
 
     def _out_task_loop(self):
         """
@@ -542,7 +570,13 @@ class FifoSyncProcessWorker:
         """
         _trace("[FifoSyncProcessWorker.thread:_out_task_loop] Thread running")
         while not self._stop_event.is_set():
-            self._callback.process_task(self._out_queue)
+            try:
+                self._callback.process_task(self._out_queue)
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.error("[FifoSyncProcessWorker.process_task] Unhandled exception")
+                self._out_queue.put(
+                    FifoEventException(exception=e, source="FifoSyncProcessWorker.process_task")
+                )
         _trace("[FifoSyncProcessWorker.thread:_out_task_loop] Thread stopping")
 
     def run_until_complete(self):
@@ -553,7 +587,13 @@ class FifoSyncProcessWorker:
         """
         _trace("[FifoSyncProcessWorker.fct:run_until_complete] Initializing sync worker")
 
-        self._callback.initialize()
+        try:
+            self._callback.initialize()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.error("[FifoSyncProcessWorker.initialize] Unhandled exception")
+            self._out_queue.put(
+                FifoEventException(exception=e, source="FifoSyncProcessWorker.initialize")
+            )
 
         reader_thread = threading.Thread(target=self._priority_in_reader)
         processor_thread = threading.Thread(target=self._priority_event_processor)
@@ -575,7 +615,13 @@ class FifoSyncProcessWorker:
 
         _trace("[FifoSyncProcessWorker.fct:run_until_complete] Worker threads joined")
 
-        self._callback.finalize()
+        try:
+            self._callback.finalize()
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.error("[FifoSyncProcessWorker.finalize] Unhandled exception")
+            self._out_queue.put(
+                FifoEventException(exception=e, source="FifoSyncProcessWorker.finalize")
+            )
         _trace("[FifoSyncProcessWorker.fct:run_until_complete] Callback finalized")
         _trace("[FifoSyncProcessWorker.fct:run_until_complete] Sync worker shutdown complete")
 

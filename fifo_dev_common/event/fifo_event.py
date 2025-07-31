@@ -267,3 +267,87 @@ class FifoEventPoison(FifoEvent):
     """
     event_id = 0
     default_priority = 0
+
+
+@FifoEvent.register
+@serializable
+@dataclass(kw_only=True)
+class FifoEventException(FifoEvent):
+    """
+    Serializable event for transporting exception information across threads, processes, or systems.
+
+    This event is used to report exceptions in a form that can be serialized and sent across
+    thread, process, or network boundaries.
+
+    Attributes:
+        class_name (str):
+            [Serializable] Name of the exception class, such as "RuntimeError".
+
+        message (str):
+            [Serializable] Exception message.
+
+    Usage:
+        # Construct from class name and message
+        try:
+            raise RuntimeError("Test message")
+        except RuntimeError as e:
+            event = FifoEventException(class_name=e.__class__.__name__, message=str(e))
+
+        # Construct directly from an exception object
+        try:
+            raise RuntimeError("Test message")
+        except RuntimeError as e:
+            event = FifoEventException(exception=e)
+
+    Raises:
+        ValueError:
+            Raised if the constructor arguments are invalid. You must provide either:
+                - both `class_name` and `message`, or
+                - only `exception`.
+    """
+    event_id = 1
+    default_priority = 0
+
+    class_name: str = field(metadata={"format": "S"})
+    message: str = field(metadata={"format": "S"})
+
+    def __init__(self, class_name: str | None = None,
+                 message: str | None = None,
+                 priority: int = -1,
+                 exception: Exception | None = None):
+        """
+        Initialize a FifoEventException for serializing exception details.
+
+        Args:
+            class_name (str, optional):
+                Name of the exception class, such as "RuntimeError".
+                Must be provided together with `message` if `exception` is not given.
+
+            message (str, optional):
+                Exception message.
+                Must be provided together with `class_name` if `exception` is not given.
+
+            priority (int, optional):
+                Event priority. If set to -1 (default), the class's default_priority is used.
+
+            exception (Exception, optional):
+                Exception object. If provided, `class_name` and `message` must not be set.
+
+        Raises:
+            ValueError:
+                If both `exception` and either `class_name` or `message` are provided.
+            ValueError:
+                If neither `exception` nor both `class_name` and `message` are provided.
+        """
+        super().__init__(priority=priority)
+        if exception is not None:
+            if class_name is not None or message is not None:
+                raise ValueError("Cannot set class_name or message when exception is provided")
+            self.class_name = exception.__class__.__name__
+            self.message = str(exception)
+        else:
+            if class_name is None or message is None:
+                raise ValueError("Both class_name and message must be provided when exception "
+                                 "is not set")
+            self.class_name = class_name
+            self.message = message

@@ -1,11 +1,12 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import IntEnum
+import socket
 import struct
 import threading
-from typing import ClassVar
+from typing import ClassVar, cast
 import pytest
-from fifo_dev_common.event.fifo_event import FifoEvent
+from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventException
 from fifo_dev_common.serialization.fifo_serialization import serializable
 
 # pylint: disable=protected-access
@@ -347,3 +348,58 @@ def test_clear_registry_allows_re_registration():
         value: int = field(metadata={"format": "i"})
 
     assert 54321 in FifoEvent._registry
+
+
+@pytest.fixture(autouse=True)
+def ensure_fifo_event_exception_registered():
+    if FifoEventException.event_id not in FifoEvent._registry:
+        FifoEvent.register(FifoEventException)
+
+
+def test_fifo_event_exception_1():
+    try:
+        raise RuntimeError("Test message")
+    except RuntimeError as e:
+        event = FifoEventException(e.__class__.__name__, str(e))
+        sock1, sock2 = socket.socketpair()
+        event.serialize_to_socket(sock1)
+        event2 = cast(FifoEventException, FifoEvent.deserialize_from_socket(sock2))
+        assert event2.class_name == "RuntimeError"
+        assert event2.message == "Test message"
+
+
+def test_fifo_event_exception_2():
+    try:
+        raise RuntimeError("Test message")
+    except RuntimeError as e:
+        event = FifoEventException(exception=e)
+        sock1, sock2 = socket.socketpair()
+        event.serialize_to_socket(sock1)
+        event2 = cast(FifoEventException, FifoEvent.deserialize_from_socket(sock2))
+        assert event2.class_name == "RuntimeError"
+        assert event2.message == "Test message"
+
+
+def test_valueerror_when_both_exception_and_class_name_or_message():
+    exc = RuntimeError("Test")
+    # Both exception and class_name
+    with pytest.raises(ValueError, match="Cannot set class_name or message when exception is provided"):
+        FifoEventException(class_name="RuntimeError", exception=exc)
+    # Both exception and message
+    with pytest.raises(ValueError, match="Cannot set class_name or message when exception is provided"):
+        FifoEventException(message="Test", exception=exc)
+    # All three
+    with pytest.raises(ValueError, match="Cannot set class_name or message when exception is provided"):
+        FifoEventException(class_name="RuntimeError", message="Test", exception=exc)
+
+
+def test_valueerror_when_neither_exception_nor_both_class_name_and_message():
+    # Neither provided
+    with pytest.raises(ValueError, match="Both class_name and message must be provided when exception is not set"):
+        FifoEventException()
+    # Only class_name
+    with pytest.raises(ValueError, match="Both class_name and message must be provided when exception is not set"):
+        FifoEventException(class_name="RuntimeError")
+    # Only message
+    with pytest.raises(ValueError, match="Both class_name and message must be provided when exception is not set"):
+        FifoEventException(message="Test")

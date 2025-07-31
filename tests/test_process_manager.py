@@ -3,12 +3,22 @@ from typing import TYPE_CHECKING
 import asyncio
 import time
 import pytest
-from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventPoison
+from fifo_dev_common.event.fifo_event import (
+    FifoEvent,
+    FifoEventPoison,
+    FifoEventException,
+)
 from fifo_dev_common.process.utils import (
     FifoProcessManager,
     FifoAsyncProcessWorkerCallback,
     FifoSyncProcessWorkerCallback
 )
+
+
+@pytest.fixture(autouse=True)
+def ensure_fifo_event_exception_registered():
+    if FifoEventException.event_id not in FifoEvent._registry:
+        FifoEvent.register(FifoEventException)
 
 if TYPE_CHECKING:
     from multiprocessing.queues import Queue  # pragma: nocover
@@ -56,6 +66,36 @@ class DemoFifoSyncProcessWorkerCallback(FifoSyncProcessWorkerCallback):
 
     def process_task(self, outgoing_queue: Queue[FifoEvent]):
         time.sleep(1)
+
+
+class ErrorAsyncCallback(FifoAsyncProcessWorkerCallback):
+    def initialize(self):
+        pass
+
+    def finalize(self):
+        pass
+
+    async def loop(self, incoming_event: FifoEvent | None, incoming_queue_size: int,
+                   outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
+        raise RuntimeError("boom")
+
+    def get_timeout(self) -> float:
+        return -1
+
+
+class ErrorSyncCallback(FifoSyncProcessWorkerCallback):
+    def initialize(self):
+        pass
+
+    def finalize(self):
+        pass
+
+    def process_event(self, incoming_event: FifoEvent, incoming_queue_size: int,
+                      outgoing_queue: Queue[FifoEvent]):
+        raise RuntimeError("boom")
+
+    def process_task(self, outgoing_queue: Queue[FifoEvent]):
+        pass
 
 
 @pytest.mark.asyncio
@@ -116,3 +156,38 @@ async def test_async_process_manager_poison_event():
     await process.send(FifoEventPoison())
     await process.stop()
     process.join()
+
+
+@pytest.mark.asyncio
+async def test_async_exception_event_propagation():
+    loop = asyncio.get_event_loop()
+    process = FifoProcessManager(loop, ErrorAsyncCallback())
+    process.start()
+
+    await process.send(FifoEvent())
+    event = await process.receive()
+
+    assert isinstance(event, FifoEventException)
+    assert event.class_name == "RuntimeError"
+    assert event.message == "boom"
+
+    await process.stop()
+    process.join()
+
+
+def test_sync_exception_event_propagation():
+    loop = asyncio.new_event_loop()
+    process = FifoProcessManager(loop, ErrorSyncCallback())
+    process.start()
+
+    async def send_and_receive():
+        await process.send(FifoEvent())
+        event = await process.receive()
+        await process.stop()
+        process.join()
+        return event
+
+    event = loop.run_until_complete(send_and_receive())
+    assert isinstance(event, FifoEventException)
+    assert event.class_name == "RuntimeError"
+    assert event.message == "boom"

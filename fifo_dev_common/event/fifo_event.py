@@ -286,18 +286,28 @@ class FifoEventException(FifoEvent):
         message (str):
             [Serializable] Exception message.
 
+        source (str | None):
+            [Serializable] Optional source identifier (e.g., thread or worker name).
+
     Usage:
         # Construct from class name and message
         try:
             raise RuntimeError("Test message")
         except RuntimeError as e:
-            event = FifoEventException(class_name=e.__class__.__name__, message=str(e))
+            event = FifoEventException(
+                class_name=e.__class__.__name__,
+                message=str(e),
+                source="worker-1"
+            )
 
         # Construct directly from an exception object
         try:
             raise RuntimeError("Test message")
         except RuntimeError as e:
-            event = FifoEventException(exception=e)
+            event = FifoEventException(
+                exception=e,
+                source=threading.current_thread().name
+            )
 
     Raises:
         ValueError:
@@ -310,11 +320,13 @@ class FifoEventException(FifoEvent):
 
     class_name: str = field(metadata={"format": "S"})
     message: str = field(metadata={"format": "S"})
+    source: str | None = field(default=None, metadata={"format": "?S"})
 
     def __init__(self, class_name: str | None = None,
                  message: str | None = None,
                  priority: int = -1,
-                 exception: Exception | None = None):
+                 exception: Exception | None = None,
+                 source: str | None = None):
         """
         Initialize a FifoEventException for serializing exception details.
 
@@ -333,6 +345,10 @@ class FifoEventException(FifoEvent):
             exception (Exception, optional):
                 Exception object. If provided, `class_name` and `message` must not be set.
 
+            source (str, optional):
+                Optional identifier of the thread, worker, or system component that raised
+                the exception.
+
         Raises:
             ValueError:
                 If both `exception` and either `class_name` or `message` are provided.
@@ -340,6 +356,8 @@ class FifoEventException(FifoEvent):
                 If neither `exception` nor both `class_name` and `message` are provided.
         """
         super().__init__(priority=priority)
+        self.source = source
+
         if exception is not None:
             if class_name is not None or message is not None:
                 raise ValueError("Cannot set class_name or message when exception is provided")

@@ -380,6 +380,19 @@ def test_fifo_event_exception_2():
         assert event2.message == "Test message"
 
 
+def test_fifo_event_exception_3():
+    try:
+        raise RuntimeError("Test message")
+    except RuntimeError as e:
+        event = FifoEventException(exception=e, source="Test #3")
+        sock1, sock2 = socket.socketpair()
+        event.serialize_to_socket(sock1)
+        event3 = cast(FifoEventException, FifoEvent.deserialize_from_socket(sock2))
+        assert event3.class_name == "RuntimeError"
+        assert event3.message == "Test message"
+        assert event3.source == "Test #3"
+
+
 def test_valueerror_when_both_exception_and_class_name_or_message():
     exc = RuntimeError("Test")
     # Both exception and class_name

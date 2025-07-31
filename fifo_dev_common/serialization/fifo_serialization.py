@@ -1209,19 +1209,8 @@ class FieldSpecCompiledFixedString(FieldSpecCompiled):
         Raises:
             UnicodeEncodeError: If the string cannot be encoded as UTF-8.
         """
-        data = getattr(class_obj, self.name).encode("utf-8")
-        if len(data) > self.length:
-            trunc = data[: self.length]
-            while True:
-                try:
-                    trunc.decode("utf-8")
-                    data = trunc
-                    break
-                except UnicodeDecodeError as exc:
-                    trunc = trunc[: exc.start]
-        buffer[idx:idx + len(data)] = data
-        if len(data) < self.length:
-            buffer[idx + len(data):idx + self.length] = b" " * (self.length - len(data))
+        data = _encode_utf8_fixed_length(getattr(class_obj, self.name), self.length)
+        buffer[idx:idx + self.length] = data
         return idx + self.length
 
     def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
@@ -1266,9 +1255,40 @@ class FieldSpecCompiledFixedString(FieldSpecCompiled):
 
 
 class FieldSpecCompiledOptionalString(FieldSpecCompiled):
-    """Optional variable-length UTF-8 string with presence flag."""
+    """
+    FieldSpecCompiled subclass for optional variable-length UTF-8 strings.
+
+    Serializes the field with a 1-byte presence flag followed by the UTF-8 string
+    if present. If the value is None, only the presence byte is stored.
+
+    On deserialization, reads the presence flag; if set, reads the string length
+    and decodes the following bytes as UTF-8.
+    """
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize the optional UTF-8 string field from `class_obj` into the buffer at `idx`.
+
+        Writes a 1-byte presence flag (0 if None, 1 if present), followed by the string length
+        (4 bytes, little-endian unsigned int) and the UTF-8 encoded bytes if present.
+
+        Args:
+            class_obj (Any):
+                The instance containing the string field.
+
+            buffer (bytearray):
+                The buffer into which to serialize data.
+
+            idx (int):
+                The starting index in the buffer at which to write data.
+
+        Returns:
+            int:
+                The updated buffer index after writing the presence flag and string bytes.
+
+        Raises:
+            UnicodeEncodeError: If the string cannot be encoded as UTF-8.
+        """
         value = getattr(class_obj, self.name)
         if value is None:
             struct.pack_into("<b", buffer, idx, 0)
@@ -1282,6 +1302,27 @@ class FieldSpecCompiledOptionalString(FieldSpecCompiled):
         return idx + len(data)
 
     def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        """
+        Deserialize the optional UTF-8 string field from the buffer at `idx`.
+
+        Reads a 1-byte presence flag; if zero, returns None. Otherwise, reads the string length
+        (4 bytes) and decodes the following bytes as UTF-8.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in the buffer at which to read data.
+
+        Returns:
+            Tuple[str | None, int]:
+                - The deserialized string or None if not present.
+                - The updated buffer index after reading the string.
+
+        Raises:
+            UnicodeDecodeError: If the bytes cannot be decoded as UTF-8.
+        """
         present = struct.unpack_from("<b", buffer, idx)[0]
         idx += 1
         if not present:
@@ -1292,6 +1333,19 @@ class FieldSpecCompiledOptionalString(FieldSpecCompiled):
         return data.decode("utf-8"), idx + length
 
     def serialized_byte_size(self, class_obj: Any) -> int:
+        """
+        Compute the number of bytes required to serialize the optional UTF-8 string field,
+        including 1 byte for the presence flag, and if present, 4 bytes for the length
+        plus the encoded string bytes.
+
+        Args:
+            class_obj (Any):
+                The instance containing the string field.
+
+        Returns:
+            int:
+                The total byte size needed to serialize the optional string field.
+        """
         value = getattr(class_obj, self.name)
         if value is None:
             return 1
@@ -1299,37 +1353,96 @@ class FieldSpecCompiledOptionalString(FieldSpecCompiled):
 
 
 class FieldSpecCompiledOptionalFixedString(FieldSpecCompiled):
-    """Optional fixed-length UTF-8 string with presence flag."""
+    """
+    FieldSpecCompiled subclass for optional fixed-length UTF-8 strings.
+
+    Serializes the field with a 1-byte presence flag followed by a fixed number of bytes
+    for the UTF-8 string if present. If the value is None, only the presence byte is stored.
+
+    If the encoded string is shorter than the fixed length, it is padded with ASCII spaces (' ').
+    If longer, it is truncated so the UTF-8 sequence fits, never splitting a multi-byte codepoint.
+
+    On deserialization, reads the presence flag; if set, reads exactly `length` bytes,
+    strips trailing ASCII spaces, and decodes as UTF-8.
+
+    Attributes:
+        length (int):
+            The fixed number of bytes used to store the string (after encoding).
+    """
 
     length: int
 
     def __init__(self, name: str, length: int):
+        """
+        Initialize the field for an optional fixed-length UTF-8 string.
+
+        Args:
+            name (str):
+                The name of the field.
+
+            length (int):
+                The fixed number of bytes to allocate for the UTF-8 encoded string.
+        """
         super().__init__(name)
         self.length = length
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize the optional fixed-length UTF-8 string field from `class_obj` into the buffer
+        at `idx`.
+
+        Writes a 1-byte presence flag (0 if None, 1 if present), followed, when present, by the
+        UTF-8 encoded string, padded or truncated to exactly `self.length` bytes.
+
+        Args:
+            class_obj (Any):
+                The instance containing the string field.
+
+            buffer (bytearray):
+                The buffer into which to serialize data.
+
+            idx (int):
+                The starting index in the buffer at which to write data.
+
+        Returns:
+            int:
+                The updated buffer index after writing the presence flag and string bytes.
+
+        Raises:
+            UnicodeEncodeError: If the string cannot be encoded as UTF-8.
+        """
         value = getattr(class_obj, self.name)
         if value is None:
             struct.pack_into("<b", buffer, idx, 0)
             return idx + 1
         struct.pack_into("<b", buffer, idx, 1)
         idx += 1
-        data = value.encode("utf-8")
-        if len(data) > self.length:
-            trunc = data[: self.length]
-            while True:
-                try:
-                    trunc.decode("utf-8")
-                    data = trunc
-                    break
-                except UnicodeDecodeError as exc:
-                    trunc = trunc[: exc.start]
-        buffer[idx:idx + len(data)] = data
-        if len(data) < self.length:
-            buffer[idx + len(data):idx + self.length] = b" " * (self.length - len(data))
+        data = _encode_utf8_fixed_length(value, self.length)
+        buffer[idx:idx + self.length] = data
         return idx + self.length
 
     def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        """
+        Deserialize the optional fixed-length UTF-8 string field from the buffer at `idx`.
+
+        Reads a 1-byte presence flag; if zero, returns None. Otherwise, reads exactly `self.length`
+        bytes, strips trailing ASCII spaces, and decodes as UTF-8.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in the buffer at which to read data.
+
+        Returns:
+            Tuple[str | None, int]:
+                - The deserialized string or None if not present.
+                - The updated buffer index after reading the string.
+
+        Raises:
+            UnicodeDecodeError: If the bytes cannot be decoded as UTF-8.
+        """
         present = struct.unpack_from("<b", buffer, idx)[0]
         idx += 1
         if not present:
@@ -1339,6 +1452,19 @@ class FieldSpecCompiledOptionalFixedString(FieldSpecCompiled):
         return s, idx + self.length
 
     def serialized_byte_size(self, class_obj: Any) -> int:
+        """
+        Compute the number of bytes required to serialize the optional fixed-length UTF-8 string
+        field, including 1 byte for the presence flag, and if present, the fixed number of bytes
+        for the string.
+
+        Args:
+            class_obj (Any):
+                The instance containing the string field.
+
+        Returns:
+            int:
+                The total byte size needed to serialize the optional fixed-length string field.
+        """
         value = getattr(class_obj, self.name)
         if value is None:
             return 1
@@ -2045,3 +2171,22 @@ def serializable(cls: C) -> C:
     setattr(cls, "serialized_byte_size", serialized_byte_size)
 
     return cls
+
+def _encode_utf8_fixed_length(s: str, length: int) -> bytes:
+    """
+    Encode a string as UTF-8, truncate or pad with spaces to exactly `length` bytes.
+    Truncation never splits a multi-byte codepoint.
+    """
+    data = s.encode("utf-8")
+    if len(data) > length:
+        trunc = data[:length]
+        while True:
+            try:
+                trunc.decode("utf-8")
+                data = trunc
+                break
+            except UnicodeDecodeError as exc:
+                trunc = trunc[:exc.start]
+    if len(data) < length:
+        data += b" " * (length - len(data))
+    return data

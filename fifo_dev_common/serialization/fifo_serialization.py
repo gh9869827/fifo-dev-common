@@ -97,10 +97,16 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
     Raises:
         ValueError:
             - If the 'format' string is invalid for array, optional, or enum types.
-            - If a generic array ('[_]'), optional ('?_'), or optional array ('[?_]') format is specified without a 'ptype'.
+            - If a generic array ('[_]'), optional ('?_'), or optional array ('[?_]') format
+              is specified without a 'ptype'.
             - If an enum format ('E<I>') is used without a 'ptype' Enum class.
             - If neither 'format' nor 'ptype' is provided in the field metadata.
     """
+    def _format_error(typename: str, allowed_chars: set[str], suffix: str = "") -> str:
+        msg = f"Format string for {typename} only supports the following characters: "
+        msg += "".join(sorted(allowed_chars))
+        return msg + suffix
+
     struct_format = field.metadata.get("format")
     ptype = field.metadata.get("ptype")
     name = field.name
@@ -109,7 +115,7 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
         if struct_format[0] == "[":
             if struct_format.startswith("[np:"):
                 if not struct_format.endswith("]"):
-                    raise ValueError("Struct format for numpy array type invalid")
+                    raise ValueError("Invalid format: numpy array format string must end with ']'")
                 dtype_key = struct_format[4:-1]
                 dtype = _NUMPY_DTYPES.get(dtype_key)
                 if dtype is None:
@@ -128,13 +134,13 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                 element_type = struct_format[2]
                 if element_type not in _ALLOWED_STRUCT_FORMAT_CHARS:
                     raise ValueError(
-                        "Struct format for optional type in arrays only supports format characters "
-                        + "".join(sorted(_ALLOWED_STRUCT_FORMAT_CHARS))
+                        _format_error("optional types in arrays", _ALLOWED_STRUCT_FORMAT_CHARS)
                     )
                 return FieldSpecCompiledOptionalPrimitiveArray(name, element_type)
 
             if not (len(struct_format) == 3 and struct_format[2] == "]"):
-                raise ValueError("Struct format for array type invalid")
+                raise ValueError("Invalid format: array format must be three characters "
+                                 "ending with ']'")
 
             if struct_format == "[_]":
                 if ptype is None:
@@ -144,14 +150,13 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
             element_type = struct_format[1]
             if element_type not in _ALLOWED_STRUCT_FORMAT_CHARS:
                 raise ValueError(
-                    "Struct only supports format characters "
-                    + "".join(sorted(_ALLOWED_STRUCT_FORMAT_CHARS))
+                    _format_error("primitive types in arrays", _ALLOWED_STRUCT_FORMAT_CHARS)
                 )
             return FieldSpecCompiledArray(name, element_type)
 
         if struct_format[0] == "?":
             if not len(struct_format) == 2:
-                raise ValueError("Struct format for optional type invalid")
+                raise ValueError("Invalid format: optional format must be two characters")
 
             if struct_format == "?_":
                 if ptype is None:
@@ -161,38 +166,43 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
             inner_type = struct_format[1]
             if inner_type not in _ALLOWED_STRUCT_FORMAT_CHARS:
                 raise ValueError(
-                    "Struct only supports format characters "
-                    + "".join(sorted(_ALLOWED_STRUCT_FORMAT_CHARS))
+                    _format_error("optional types", _ALLOWED_STRUCT_FORMAT_CHARS)
                 )
             return FieldSpecCompiledOptional(name, inner_type)
 
         if struct_format.startswith("E<"):
             if not (len(struct_format) == 4 and struct_format[3] == ">"):
-                raise ValueError("Struct format for enum type invalid")
+                raise ValueError("Invalid format: enum format must be four characters "
+                                 "ending with '>'")
 
             inner_type = struct_format[2]
 
             supported_enum_ints = {"b", "B", "h", "H", "i", "I"}
             if inner_type not in supported_enum_ints:
-                raise ValueError("Struct only supports integer formats bBhHiI")
+                raise ValueError(
+                    "Format string for enum types only supports integer "
+                    "format characters: b, B, h, H, i, I"
+                )
 
             if ptype is None:
-                raise ValueError("Type must be provided for Struct")
+                raise ValueError("Type must be provided for Enum")
 
             return FieldSpecCompiledEnum(name, inner_type, ptype)
 
         if struct_format.startswith("T<"):
             if not (len(struct_format) >= 4 and struct_format[-1] == ">"):
-                raise ValueError("Struct format for tuple type invalid")
+                raise ValueError(
+                    "Invalid format: tuple format must start with 'T<', end with '>', "
+                    "and contain at least one format character"
+                )
             inner_types = struct_format[2:-1]
             try:
                 struct.calcsize('<' + inner_types.replace('y', 'B'))
             except struct.error as exc:
-                raise ValueError("Struct format for tuple type invalid") from exc
+                raise ValueError("Invalid format: tuple format is not valid struct syntax") from exc
             if any(c not in _ALLOWED_STRUCT_FORMAT_CHARS for c in inner_types):
                 raise ValueError(
-                    "Struct only supports format characters "
-                    + "".join(sorted(_ALLOWED_STRUCT_FORMAT_CHARS))
+                    _format_error("tuple types", _ALLOWED_STRUCT_FORMAT_CHARS)
                 )
             return FieldSpecCompiledTuple(name, inner_types)
 
@@ -201,23 +211,27 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
 
         if struct_format.startswith("S["):
             if not struct_format.endswith("]"):
-                raise ValueError("Struct format for string type invalid")
+                raise ValueError("Invalid format: fixed-length string must end with ']'")
             length_txt = struct_format[2:-1]
             if not length_txt.isdigit():
-                raise ValueError("Struct format for string type invalid")
+                raise ValueError(
+                    "Invalid format: fixed-length string must contain a numeric length"
+                )
             return FieldSpecCompiledFixedString(name, int(length_txt))
 
         if len(struct_format) != 1 or struct_format not in _ALLOWED_STRUCT_FORMAT_CHARS:
             raise ValueError(
-                "Struct only supports format characters "
-                + "".join(sorted(_ALLOWED_STRUCT_FORMAT_CHARS))
+                _format_error(
+                    "primitive types", _ALLOWED_STRUCT_FORMAT_CHARS, " and 'S' for strings"
+                )
             )
+
         return FieldSpecCompiledBasic(name, struct_format)
 
     if ptype is not None:
         return FieldSpecCompiledGeneric(name, ptype)
 
-    raise ValueError("Type or Struct format must be provided")
+    raise ValueError("Either a type or struct format must be provided")
 
 
 class FieldSpecCompiled(ABC):

@@ -340,37 +340,42 @@ def test_super_combo():
 
 
 @pytest.mark.parametrize("format_string,ptype,err_msg", [
-    ("[f", None, "Struct format for array type invalid"),
-    ("[__", None, "Struct format for array type invalid"),
-    ("[",   None, "Struct format for array type invalid"),
+    ("[f", None, "Invalid format: array format must be three characters ending with ']'"),
+    ("[__", None, "Invalid format: array format must be three characters ending with ']'"),
+    ("[",   None, "Invalid format: array format must be three characters ending with ']'"),
     ("[_]", None, "Type must be provided for generic array"),
     ("[?_]", None, "Type must be provided for optional array"),
+    ("[?P]", None, "Format string for optional types in arrays only supports the following characters"),
 
-    ("[x]", None, "Struct only supports format characters BHILQbdefhilqy"),
+    ("[x]", None, "Format string for primitive types in arrays only supports the following characters"),
 
-    ("?",   None, "Struct format for optional type invalid"),
-    ("?__", None, "Struct format for optional type invalid"),
+    ("P",   None, "Format string for primitive types only supports the following characters"),
+    
+    ("?",   None, "Invalid format: optional format must be two characters"),
+    ("?__", None, "Invalid format: optional format must be two characters"),
     ("?_",  None, "Type must be provided for generic optional"),
-    ("?x", None, "Struct only supports format characters BHILQbdefhilqy"),
+    ("?x", None, "Format string for optional types only supports the following characters"),
 
-    ("E<",  None, "Struct format for enum type invalid"),
-    ("E<>",  None, "Struct format for enum type invalid"),
-    ("E<_>",  None, "Struct only supports integer formats bBhHiI"),
-    ("E<d>",  None, "Struct only supports integer formats bBhHiI"),
-    ("E<I>",  None, "Type must be provided for Struct"),
+    ("E<",  None, "Invalid format: enum format must be four characters ending with '>'"),
+    ("E<>",  None, "Invalid format: enum format must be four characters ending with '>'"),
+    ("E<_>",  None, "Format string for enum types only supports integer format characters: b, B, h, H, i, I"),
+    ("E<d>",  None, "Format string for enum types only supports integer format characters: b, B, h, H, i, I"),
+    ("E<I>",  None, "Type must be provided for Enum"),
 
-    ("T<",   None, "Struct format for tuple type invalid"),
-    ("T<>",  None, "Struct format for tuple type invalid"),
-    ("T<__>", None, "Struct format for tuple type invalid"),
-    ("T<x>", None, "Struct only supports format characters BHILQbdefhilqy"),
+    ("T<",   None, "Invalid format: tuple format must start with 'T<', end with '>', and contain at least one format character"),
+    ("T<>",  None, "Invalid format: tuple format must start with 'T<', end with '>', and contain at least one format character"),
+    ("T<__>", None, "Invalid format: tuple format is not valid struct syntax"),
+    ("T<x>", None, "Format string for tuple types only supports the following characters"),
+    ("T<bBx>", None, "Format string for tuple types only supports the following characters"),
 
-    ("S[", None, "Struct format for string type invalid"),
-    ("S[]", None, "Struct format for string type invalid"),
-    ("S[a]", None, "Struct format for string type invalid"),
+    ("S[", None, "Invalid format: fixed-length string must end with ']'"),
+    ("S[]", None, "Invalid format: fixed-length string must contain a numeric length"),
+    ("S[a]", None, "Invalid format: fixed-length string must contain a numeric length"),
 
     ("[np:bad]", None, "Unsupported numpy dtype"),
+    ("[np:u8", None, "Invalid format: numpy array format string must end with ']'"),
 
-    (None,  None, "Type or Struct format must be provided"),
+    (None,  None, "Either a type or struct format must be provided"),
 ])
 def test_compile_field_value_errors(format_string: str | None, ptype: Type[Any] | None, err_msg: str):
     metadata = {}

@@ -372,6 +372,10 @@ def test_super_combo():
     ("S[]", None, "Invalid format: fixed-length string must contain a numeric length"),
     ("S[a]", None, "Invalid format: fixed-length string must contain a numeric length"),
 
+    ("?S[", None, "Invalid format: fixed-length string must end with ']'"),
+    ("?S[]", None, "Invalid format: fixed-length string must contain a numeric length"),
+    ("?S[a]", None, "Invalid format: fixed-length string must contain a numeric length"),
+
     ("[np:bad]", None, "Unsupported numpy dtype"),
     ("[np:u8", None, "Invalid format: numpy array format string must end with ']'"),
 
@@ -468,6 +472,18 @@ class TestStringFixed(FifoSerializable):
     tag: str = field(metadata={"format": "S[8]"})
 
 
+@serializable
+@dataclass
+class TestOptionalStringVar(FifoSerializable):
+    name: str | None = field(metadata={"format": "?S"})
+
+
+@serializable
+@dataclass
+class TestOptionalStringFixed(FifoSerializable):
+    tag: str | None = field(metadata={"format": "?S[8]"})
+
+
 def test_string_variable_roundtrip() -> None:
     obj = TestStringVar("hello\u03c0")
     buf = bytearray(obj.serialized_byte_size())
@@ -532,3 +548,33 @@ def test_string_fixed_emoji_truncation_no_length_hack() -> None:
     restored, _ = TestStringFixed.deserialize_from_bytes(buf, 0)
     # After deserialization, only "..🚀" should remain
     assert restored.tag == "..🚀"
+
+
+def test_optional_string_variable_roundtrip() -> None:
+    obj = TestOptionalStringVar("hello")
+    buf = bytearray(obj.serialized_byte_size())
+    obj.serialize_to_bytes(buf, 0)
+    restored, _ = TestOptionalStringVar.deserialize_from_bytes(buf, 0)
+    assert restored.name == "hello"
+
+    obj_none = TestOptionalStringVar(None)
+    buf2 = bytearray(obj_none.serialized_byte_size())
+    obj_none.serialize_to_bytes(buf2, 0)
+    restored_none, _ = TestOptionalStringVar.deserialize_from_bytes(buf2, 0)
+    assert restored_none.name is None
+
+
+def test_optional_string_fixed_roundtrip() -> None:
+    obj = TestOptionalStringFixed("hi")
+    buf = bytearray(obj.serialized_byte_size())
+    obj.serialize_to_bytes(buf, 0)
+    assert buf[0] == 1
+    restored, _ = TestOptionalStringFixed.deserialize_from_bytes(buf, 0)
+    assert restored.tag == "hi"
+
+    obj_none = TestOptionalStringFixed(None)
+    buf2 = bytearray(obj_none.serialized_byte_size())
+    obj_none.serialize_to_bytes(buf2, 0)
+    assert buf2 == b"\x00"
+    restored_none, _ = TestOptionalStringFixed.deserialize_from_bytes(buf2, 0)
+    assert restored_none.tag is None

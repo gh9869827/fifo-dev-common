@@ -376,6 +376,8 @@ Provides a lightweight, efficient binary serialization framework for Python data
 | `[np:x]`   | **NumPy array**                      | 1-byte ndim + N×4-byte shape + raw data buffer                         | `x` must be NumPy dtype: `u8`, `u16`, `u32`, `i8`, `i16`, `i32`, `f32`, `f64` |
 | `S`        | **Variable-length UTF-8 string**     | 4-byte length prefix + UTF-8 encoded bytes                             | -                                                                     |
 | `S[x]`     | **Fixed-length UTF-8 string**        | UTF-8 encoded, space-padded or truncated to `x` bytes (UTF-8 safe)     | -                                                                     |
+| `?S`       | **Optional variable-length UTF-8 string** | 1-byte presence flag + 4-byte length + UTF-8 encoded bytes            | -
+| `?S[x]`    | **Optional fixed-length UTF-8 string**    | 1-byte presence flag + UTF-8 encoded, space-padded or truncated to `x` bytes | -
 | `E<x>`     | **Enum stored as integer**           | Stored as `x` (e.g., `B`, `H`, `I`)                                    | `x` must be one of: `b B h H i I`                                     |
 | `?_`       | **Optional nested object**           | 1-byte presence flag + nested serialization if present                 | -                                                                     |
 | `[_]`      | **Array of nested objects**          | 4-byte length prefix + consecutive nested serializations               | -                                                                     |

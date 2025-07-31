@@ -154,6 +154,19 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                 )
             return FieldSpecCompiledArray(name, element_type)
 
+        if struct_format.startswith("?S["):
+            if not struct_format.endswith("]"):
+                raise ValueError("Invalid format: fixed-length string must end with ']'")
+            length_txt = struct_format[3:-1]
+            if not length_txt.isdigit():
+                raise ValueError(
+                    "Invalid format: fixed-length string must contain a numeric length"
+                )
+            return FieldSpecCompiledOptionalFixedString(name, int(length_txt))
+
+        if struct_format == "?S":
+            return FieldSpecCompiledOptionalString(name)
+
         if struct_format[0] == "?":
             if not len(struct_format) == 2:
                 raise ValueError("Invalid format: optional format must be two characters")
@@ -1250,6 +1263,86 @@ class FieldSpecCompiledFixedString(FieldSpecCompiled):
                 The fixed byte size for serialization (`self.length`).
         """
         return self.length
+
+
+class FieldSpecCompiledOptionalString(FieldSpecCompiled):
+    """Optional variable-length UTF-8 string with presence flag."""
+
+    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        value = getattr(class_obj, self.name)
+        if value is None:
+            struct.pack_into("<b", buffer, idx, 0)
+            return idx + 1
+        struct.pack_into("<b", buffer, idx, 1)
+        idx += 1
+        data = value.encode("utf-8")
+        struct.pack_into("<I", buffer, idx, len(data))
+        idx += 4
+        buffer[idx:idx + len(data)] = data
+        return idx + len(data)
+
+    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        present = struct.unpack_from("<b", buffer, idx)[0]
+        idx += 1
+        if not present:
+            return None, idx
+        length = struct.unpack_from("<I", buffer, idx)[0]
+        idx += 4
+        data = bytes(buffer[idx:idx + length])
+        return data.decode("utf-8"), idx + length
+
+    def serialized_byte_size(self, class_obj: Any) -> int:
+        value = getattr(class_obj, self.name)
+        if value is None:
+            return 1
+        return 1 + 4 + len(value.encode("utf-8"))
+
+
+class FieldSpecCompiledOptionalFixedString(FieldSpecCompiled):
+    """Optional fixed-length UTF-8 string with presence flag."""
+
+    length: int
+
+    def __init__(self, name: str, length: int):
+        super().__init__(name)
+        self.length = length
+
+    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        value = getattr(class_obj, self.name)
+        if value is None:
+            struct.pack_into("<b", buffer, idx, 0)
+            return idx + 1
+        struct.pack_into("<b", buffer, idx, 1)
+        idx += 1
+        data = value.encode("utf-8")
+        if len(data) > self.length:
+            trunc = data[: self.length]
+            while True:
+                try:
+                    trunc.decode("utf-8")
+                    data = trunc
+                    break
+                except UnicodeDecodeError as exc:
+                    trunc = trunc[: exc.start]
+        buffer[idx:idx + len(data)] = data
+        if len(data) < self.length:
+            buffer[idx + len(data):idx + self.length] = b" " * (self.length - len(data))
+        return idx + self.length
+
+    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        present = struct.unpack_from("<b", buffer, idx)[0]
+        idx += 1
+        if not present:
+            return None, idx
+        data = bytes(buffer[idx:idx + self.length])
+        s = data.rstrip(b" ").decode("utf-8")
+        return s, idx + self.length
+
+    def serialized_byte_size(self, class_obj: Any) -> int:
+        value = getattr(class_obj, self.name)
+        if value is None:
+            return 1
+        return 1 + self.length
 
 
 class FieldSpecCompiledTuple(FieldSpecCompiled):

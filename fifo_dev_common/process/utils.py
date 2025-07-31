@@ -18,6 +18,7 @@ else:
 
 logger = get_logger(__name__)
 
+_trace = logger.trace
 
 class FifoProcessWorkerBase(ABC):
     """
@@ -254,13 +255,13 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         """
         assert self._loop is not None
 
-        logger.trace("[FifoAsyncProcessWorker.thread:_in_queue_puller] Thread running")
+        _trace("[FifoAsyncProcessWorker.thread:_in_queue_puller] Thread running")
         while True:
             event = self._in_queue.get()
             asyncio.run_coroutine_threadsafe(self._async_in.put(event), self._loop)
-            logger.trace("[FifoAsyncProcessWorker.thread:_in_queue_puller] Event pulled from main process")
+            _trace("[FifoAsyncProcessWorker.thread:_in_queue_puller] Event pulled from main process")  # pylint: disable=line-too-long
             if isinstance(event, FifoEventPoison):
-                logger.trace("[FifoAsyncProcessWorker.thread:_in_queue_puller] Poison event received; stopping thread")
+                _trace("[FifoAsyncProcessWorker.thread:_in_queue_puller] Poison event received; stopping thread")  # pylint: disable=line-too-long
                 break
 
     def _out_queue_pusher(self) -> None:
@@ -273,13 +274,13 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         """
         assert self._loop is not None
 
-        logger.trace("[FifoAsyncProcessWorker.thread:_out_queue_pusher] Thread running")
+        _trace("[FifoAsyncProcessWorker.thread:_out_queue_pusher] Thread running")
         while True:
             event = asyncio.run_coroutine_threadsafe(self._async_out.get(), self._loop).result()
             self._out_queue.put(event)
-            logger.trace("[FifoAsyncProcessWorker.thread:_out_queue_pusher] Event sent to main process")
+            _trace("[FifoAsyncProcessWorker.thread:_out_queue_pusher] Event sent to main process")
             if isinstance(event, FifoEventPoison):
-                logger.trace("[FifoAsyncProcessWorker.thread:_out_queue_pusher] Poison event sent; stopping thread")
+                _trace("[FifoAsyncProcessWorker.thread:_out_queue_pusher] Poison event sent; stopping thread")  # pylint: disable=line-too-long
                 break
 
         self._loop.call_soon_threadsafe(self._event_queue_pusher_done.set)
@@ -293,7 +294,7 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         thread to finish, signaling that there are no more asyncio operations being processed or
         pending.
         """
-        logger.trace("[FifoAsyncProcessWorker.fct:_process_loop] Event loop running")
+        _trace("[FifoAsyncProcessWorker.fct:_process_loop] Event loop running")
         while True:
             timeout = self._callback.get_timeout()
             if timeout == -1:
@@ -311,16 +312,16 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
 
             if isinstance(event, FifoEventPoison):
                 await self._async_out.put(event)
-                logger.trace("[FifoAsyncProcessWorker.fct:_process_loop] Poison event processed; shutting down event loop")
+                _trace("[FifoAsyncProcessWorker.fct:_process_loop] Poison event processed; shutting down event loop")  # pylint: disable=line-too-long
                 break
 
             await self._callback.loop(event, self._async_in.qsize(), self._async_out)
 
         # need to wait for the pusher thread to complete so that we exit the loop process
         # only when no more asyncio operation are processing or pending
-        logger.trace("[FifoAsyncProcessWorker.fct:_process_loop] Waiting for _out_queue_pusher thread to signal completion")
+        _trace("[FifoAsyncProcessWorker.fct:_process_loop] Waiting for _out_queue_pusher thread to signal completion")  # pylint: disable=line-too-long
         await self._event_queue_pusher_done.wait()
-        logger.trace("[FifoAsyncProcessWorker.fct:_process_loop] Event loop stopped")
+        _trace("[FifoAsyncProcessWorker.fct:_process_loop] Event loop stopped")
 
     def run_until_complete(self) -> None:
         """
@@ -328,7 +329,7 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
 
         Runs until a poison event is received, then joins threads and closes the event loop.
         """
-        logger.trace("[FifoAsyncProcessWorker] Initializing async worker")
+        _trace("[FifoAsyncProcessWorker] Initializing async worker")
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
 
@@ -338,20 +339,20 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         pusher_thread = threading.Thread(target=self._out_queue_pusher)
         puller_thread.start()
         pusher_thread.start()
-        logger.trace("[FifoAsyncProcessWorker.fct:run_until_complete] Worker threads started")
+        _trace("[FifoAsyncProcessWorker.fct:run_until_complete] Worker threads started")
         self._loop.run_until_complete(self._process_loop())
-        logger.trace("[FifoAsyncProcessWorker.fct:run_until_complete] Event loop run complete")
+        _trace("[FifoAsyncProcessWorker.fct:run_until_complete] Event loop run complete")
         puller_thread.join()
-        logger.trace("[FifoAsyncProcessWorker.fct:run_until_complete] _in_queue_puller thread joined")
+        _trace("[FifoAsyncProcessWorker.fct:run_until_complete] _in_queue_puller thread joined")
         pusher_thread.join()
-        logger.trace("[FifoAsyncProcessWorker.fct:run_until_complete] _out_queue_pusher thread joined")
+        _trace("[FifoAsyncProcessWorker.fct:run_until_complete] _out_queue_pusher thread joined")
 
         self._callback.finalize()
-        logger.trace("[FifoAsyncProcessWorker.fct:run_until_complete] Callback finalized")
-        logger.trace("[FifoAsyncProcessWorker.fct:run_until_complete] Async worker shutdown complete")
+        _trace("[FifoAsyncProcessWorker.fct:run_until_complete] Callback finalized")
+        _trace("[FifoAsyncProcessWorker.fct:run_until_complete] Async worker shutdown complete")
 
         self._loop.close()
-        logger.trace("[FifoAsyncProcessWorker.fct:run_until_complete] Event loop closed")
+        _trace("[FifoAsyncProcessWorker.fct:run_until_complete] Event loop closed")
         self._loop = None
 
 
@@ -505,13 +506,13 @@ class FifoSyncProcessWorker:
         Stops when a FifoEventPoison is received, which is forwarded to the local priority queue
         to cascade the shutdown process.
         """
-        logger.trace("[FifoSyncProcessWorker.thread:_priority_in_reader] Thread running")
+        _trace("[FifoSyncProcessWorker.thread:_priority_in_reader] Thread running")
         while True:
             event = self._in_queue.get()
             self._local_priority_queue.put(event)
-            logger.trace("[FifoSyncProcessWorker.thread:_priority_in_reader] Event queued for processing")
+            _trace("[FifoSyncProcessWorker.thread:_priority_in_reader] Event queued for processing")
             if isinstance(event, FifoEventPoison):
-                logger.trace("[FifoSyncProcessWorker.thread:_priority_in_reader] Poison event received; stopping thread")
+                _trace("[FifoSyncProcessWorker.thread:_priority_in_reader] Poison event received; stopping thread")  # pylint: disable=line-too-long
                 break
 
     def _priority_event_processor(self):
@@ -522,13 +523,13 @@ class FifoSyncProcessWorker:
         Stops when a FifoEventPoison is received, signals the stop event, and forwards the poison
         event to the output queue to cascade the shutdown process.
         """
-        logger.trace("[FifoSyncProcessWorker.thread:_priority_event_processor] Thread running")
+        _trace("[FifoSyncProcessWorker.thread:_priority_event_processor] Thread running")
         while True:
             event = self._local_priority_queue.get()
             if isinstance(event, FifoEventPoison):
                 self._stop_event.set()
                 self._out_queue.put(event)
-                logger.trace("[FifoSyncProcessWorker.thread:_priority_event_processor] Poison event processed; stopping thread")
+                _trace("[FifoSyncProcessWorker.thread:_priority_event_processor] Poison event processed; stopping thread")  # pylint: disable=line-too-long
                 break
             self._callback.process_event(event, self._local_priority_queue.qsize(), self._out_queue)
 
@@ -539,10 +540,10 @@ class FifoSyncProcessWorker:
 
         Stops when the stop event is set (after a poison event is received).
         """
-        logger.trace("[FifoSyncProcessWorker.thread:_out_task_loop] Thread running")
+        _trace("[FifoSyncProcessWorker.thread:_out_task_loop] Thread running")
         while not self._stop_event.is_set():
             self._callback.process_task(self._out_queue)
-        logger.trace("[FifoSyncProcessWorker.thread:_out_task_loop] Thread stopping")
+        _trace("[FifoSyncProcessWorker.thread:_out_task_loop] Thread stopping")
 
     def run_until_complete(self):
         """
@@ -550,7 +551,7 @@ class FifoSyncProcessWorker:
 
         Joins all threads to ensure clean shutdown.
         """
-        logger.trace("[FifoSyncProcessWorker.fct:run_until_complete] Initializing sync worker")
+        _trace("[FifoSyncProcessWorker.fct:run_until_complete] Initializing sync worker")
 
         self._callback.initialize()
 
@@ -559,24 +560,24 @@ class FifoSyncProcessWorker:
         out_task_thread = threading.Thread(target=self._out_task_loop)
 
         reader_thread.start()
-        logger.trace("[FifoSyncProcessWorker.fct:run_until_complete] _priority_in_reader thread started")
+        _trace("[FifoSyncProcessWorker.fct:run_until_complete] _priority_in_reader thread started")
         processor_thread.start()
-        logger.trace("[FifoSyncProcessWorker.fct:run_until_complete] _priority_event_processor thread started")
+        _trace("[FifoSyncProcessWorker.fct:run_until_complete] _priority_event_processor thread started")  # pylint: disable=line-too-long
         out_task_thread.start()
-        logger.trace("[FifoSyncProcessWorker.fct:run_until_complete] _out_task_loop thread started")
+        _trace("[FifoSyncProcessWorker.fct:run_until_complete] _out_task_loop thread started")
 
         reader_thread.join()
-        logger.trace("[FifoSyncProcessWorker.fct:run_until_complete] _priority_in_reader thread joined")
+        _trace("[FifoSyncProcessWorker.fct:run_until_complete] _priority_in_reader thread joined")
         processor_thread.join()
-        logger.trace("[FifoSyncProcessWorker.fct:run_until_complete] _priority_event_processor thread joined")
+        _trace("[FifoSyncProcessWorker.fct:run_until_complete] _priority_event_processor thread joined")  # pylint: disable=line-too-long
         out_task_thread.join()
-        logger.trace("[FifoSyncProcessWorker.fct:run_until_complete] _out_task_loop thread joined")
+        _trace("[FifoSyncProcessWorker.fct:run_until_complete] _out_task_loop thread joined")
 
-        logger.trace("[FifoSyncProcessWorker.fct:run_until_complete] Worker threads joined")
+        _trace("[FifoSyncProcessWorker.fct:run_until_complete] Worker threads joined")
 
         self._callback.finalize()
-        logger.trace("[FifoSyncProcessWorker.fct:run_until_complete] Callback finalized")
-        logger.trace("[FifoSyncProcessWorker.fct:run_until_complete] Sync worker shutdown complete")
+        _trace("[FifoSyncProcessWorker.fct:run_until_complete] Callback finalized")
+        _trace("[FifoSyncProcessWorker.fct:run_until_complete] Sync worker shutdown complete")
 
 def _runner_async(in_queue: Queue[FifoEvent],
                   out_queue: Queue[FifoEvent],
@@ -686,13 +687,13 @@ class FifoProcessManager:
         This launches the worker process and starts the threads that transfer events in both 
         directions between the main process and the worker process.
         """
-        logger.trace("[FifoProcessManager.fct:start] Starting worker process and communication threads")
+        _trace("[FifoProcessManager.fct:start] Starting worker process and communication threads")
         self._proc.start()
-        logger.trace("[FifoProcessManager.fct:start] Worker process started")
+        _trace("[FifoProcessManager.fct:start] Worker process started")
         self._pusher_thread.start()
-        logger.trace("[FifoProcessManager.fct:start] _pusher_thread started")
+        _trace("[FifoProcessManager.fct:start] _pusher_thread started")
         self._puller_thread.start()
-        logger.trace("[FifoProcessManager.fct:start] _puller_thread started")
+        _trace("[FifoProcessManager.fct:start] _puller_thread started")
 
     async def stop(self) -> None:
         """
@@ -701,15 +702,15 @@ class FifoProcessManager:
         Sends a poison event to the worker process and waits until the poison event is received
         back from the worker, indicating shutdown is complete.
         """
-        logger.trace("[FifoProcessManager.fct:stop] Sending FifoEventPoison to request shutdown")
+        _trace("[FifoProcessManager.fct:stop] Sending FifoEventPoison to request shutdown")
         await self._async_in.put(FifoEventPoison())
 
-        logger.trace("[FifoProcessManager.fct:stop] Awaiting worker shutdown confirmation")
+        _trace("[FifoProcessManager.fct:stop] Awaiting worker shutdown confirmation")
         while True:
             event: FifoEvent = await self._async_out.get()
             if isinstance(event, FifoEventPoison):
                 break
-        logger.trace("[FifoProcessManager.fct:stop] Received FifoEventPoison confirmation from worker")
+        _trace("[FifoProcessManager.fct:stop] Received FifoEventPoison confirmation from worker")
 
     def join(self) -> None:
         """
@@ -717,14 +718,14 @@ class FifoProcessManager:
 
         Joins the worker process and both communication threads to ensure clean shutdown.
         """
-        logger.trace("[FifoProcessManager.fct:join] Joining worker process and communication threads")
+        _trace("[FifoProcessManager.fct:join] Joining worker process and communication threads")
         self._proc.join()
-        logger.trace("[FifoProcessManager.fct:join] Worker process joined")
+        _trace("[FifoProcessManager.fct:join] Worker process joined")
         self._pusher_thread.join()
-        logger.trace("[FifoProcessManager.fct:join] _pusher_thread joined")
+        _trace("[FifoProcessManager.fct:join] _pusher_thread joined")
         self._puller_thread.join()
-        logger.trace("[FifoProcessManager.fct:join] _puller_thread joined")
-        logger.trace("[FifoProcessManager.fct:join] Worker process and communication threads joined")
+        _trace("[FifoProcessManager.fct:join] _puller_thread joined")
+        _trace("[FifoProcessManager.fct:join] Worker process and communication threads joined")
 
     async def send(self, event: FifoEvent) -> None:
         """
@@ -734,9 +735,9 @@ class FifoProcessManager:
             event (FifoEvent):
                 The event to send to the worker process.
         """
-        logger.trace("[FifoProcessManager.fct:send] Dispatching event to worker")
+        _trace("[FifoProcessManager.fct:send] Dispatching event to worker")
         await self._async_in.put(event)
-        logger.trace("[FifoProcessManager.fct:send] Event dispatched")
+        _trace("[FifoProcessManager.fct:send] Event dispatched")
 
     async def receive(self) -> FifoEvent:
         """
@@ -746,9 +747,9 @@ class FifoProcessManager:
             FifoEvent:
                 The next event produced by the worker process.
         """
-        logger.trace("[FifoProcessManager.fct:receive] Awaiting event from worker")
+        _trace("[FifoProcessManager.fct:receive] Awaiting event from worker")
         event = await self._async_out.get()
-        logger.trace("[FifoProcessManager.fct:receive] Event received from worker")
+        _trace("[FifoProcessManager.fct:receive] Event received from worker")
         return event
 
     def _in_queue_pusher(self) -> None:
@@ -758,13 +759,13 @@ class FifoProcessManager:
         Stops when a FifoEventPoison is received, which is forwarded to the interprocess input
         queue to cascade the shutdown process.
         """
-        logger.trace("[FifoProcessManager.thread:_in_queue_pusher] Thread running")
+        _trace("[FifoProcessManager.thread:_in_queue_pusher] Thread running")
         while True:
             event = asyncio.run_coroutine_threadsafe(self._async_in.get(), self._loop).result()
             self._in_queue.put(event)
-            logger.trace("[FifoProcessManager.thread:_in_queue_pusher] Forwarded event to worker process")
+            _trace("[FifoProcessManager.thread:_in_queue_pusher] Forwarded event to worker process")
             if isinstance(event, FifoEventPoison):
-                logger.trace("[FifoProcessManager.thread:_in_queue_pusher] Poison event forwarded; stopping thread")
+                _trace("[FifoProcessManager.thread:_in_queue_pusher] Poison event forwarded; stopping thread")  # pylint: disable=line-too-long
                 break
 
     def _out_queue_puller(self) -> None:
@@ -774,11 +775,11 @@ class FifoProcessManager:
         Stops when a FifoEventPoison is received, which is forwarded to the async output queue to
         cascade the shutdown process.
         """
-        logger.trace("[FifoProcessManager.thread:_out_queue_puller] Thread running")
+        _trace("[FifoProcessManager.thread:_out_queue_puller] Thread running")
         while True:
             event = self._out_queue.get()
             asyncio.run_coroutine_threadsafe(self._async_out.put(event), self._loop)
-            logger.trace("[FifoProcessManager.thread:_out_queue_puller] Received event from worker process")
+            _trace("[FifoProcessManager.thread:_out_queue_puller] Received event from worker process")  # pylint: disable=line-too-long
             if isinstance(event, FifoEventPoison):
-                logger.trace("[FifoProcessManager.thread:_out_queue_puller] Poison event received; stopping thread")
+                _trace("[FifoProcessManager.thread:_out_queue_puller] Poison event received; stopping thread")  # pylint: disable=line-too-long
                 break

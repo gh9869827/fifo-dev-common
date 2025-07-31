@@ -24,8 +24,7 @@ It provides the following for runtime type checks and casting, docstring parsing
 - `@serializable` decorator and `FifoSerializable` base class: Efficient binary serialization and deserialization for dataclasses, supporting primitives, enums, optional fields, arrays, and nested objects.
 - `recv_all(sock, n)`: Efficiently receive exactly `n` bytes from a socket-like object supporting `recv_into()`.
 - `class FifoEvent`: Base class for binary-serializable events, with factory deserialization and class registration for cross-system use.
-
----
+- `get_logger()`: Returns a logger instance with `.trace()` support for fine-grained debugging. Registers a custom TRACE level and logger class.
 
 ## 📚 Table of Contents
 
@@ -39,6 +38,7 @@ It provides the following for runtime type checks and casting, docstring parsing
   - [socket_utils](#fifo_dev_commonsocketsocket_utils)
   - [fifo_serialization](#fifo_dev_commonserializationfifo_serialization)
   - [fifo_event](#fifo_dev_commoneventfifo_event)
+  - [logger](#fifo_dev_commonlogginglogger)
 - [🧪 Tests](#-tests)
 - [📄 License](#-license)
 
@@ -551,6 +551,34 @@ print(f"Score: {restored.score}")                                         # Outp
 print(f"State: {restored.state.name}")                                    # Output=RUN
 print(f"Position: ({restored.position.x}, {restored.position.y})")        # Output=(7, 8)
 print(f"Priority: {restored.priority}")                                   # Output=77
+```
+
+---
+
+### `fifo_dev_common.logging.logger`
+
+Defines `get_logger(name=None)` — returns a logger instance with `.trace()` support.  
+Registers a custom TRACE log level (`level=5`) and uses a subclassed logger to enable fine-grained tracing.  
+Compatible with the standard Python `logging` module.
+
+**Examples:**
+
+```python
+from fifo_dev_common.logging.logger import get_logger
+
+logger = get_logger(__name__)
+
+logger.trace("This is a low-level trace message for debugging internals")
+logger.debug("Standard debug message")
+logger.info("Informational message")
+```
+
+> `trace()` messages are only shown if the logging level is set to `TRACE` (i.e. `level=5`).  
+> You can enable them via:
+
+```python
+import logging
+logging.basicConfig(level=5)
 ```
 
 ---

@@ -17,7 +17,7 @@ from fifo_dev_common.process.utils import (
 
 @pytest.fixture(autouse=True)
 def ensure_fifo_event_exception_registered():
-    if FifoEventException.event_id not in FifoEvent._registry:
+    if FifoEventException.event_id not in FifoEvent._registry: # pyright: ignore[reportPrivateUsage]  # pylint: disable=protected-access
         FifoEvent.register(FifoEventException)
 
 if TYPE_CHECKING:
@@ -30,10 +30,10 @@ class DemoFifoAsyncProcessWorkerCallback(FifoAsyncProcessWorkerCallback):
     def __init__(self, timeout: float = -1):
         self._timeout = timeout
 
-    def initialize(self):
+    def initialize(self, outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
         pass
 
-    def finalize(self):
+    def finalize(self, outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
         pass
 
     async def loop(self,
@@ -52,10 +52,10 @@ class DemoFifoAsyncProcessWorkerCallback(FifoAsyncProcessWorkerCallback):
 
 class DemoFifoSyncProcessWorkerCallback(FifoSyncProcessWorkerCallback):
 
-    def initialize(self):
+    def initialize(self, outgoing_queue: Queue[FifoEvent]):
         pass
 
-    def finalize(self):
+    def finalize(self, outgoing_queue: Queue[FifoEvent]):
         pass
 
     def process_event(self,
@@ -69,10 +69,10 @@ class DemoFifoSyncProcessWorkerCallback(FifoSyncProcessWorkerCallback):
 
 
 class ErrorAsyncCallback(FifoAsyncProcessWorkerCallback):
-    def initialize(self):
+    def initialize(self, outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
         pass
 
-    def finalize(self):
+    def finalize(self, outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
         pass
 
     async def loop(self, incoming_event: FifoEvent | None, incoming_queue_size: int,
@@ -84,10 +84,10 @@ class ErrorAsyncCallback(FifoAsyncProcessWorkerCallback):
 
 
 class ErrorSyncCallback(FifoSyncProcessWorkerCallback):
-    def initialize(self):
+    def initialize(self, outgoing_queue: Queue[FifoEvent]):
         pass
 
-    def finalize(self):
+    def finalize(self, outgoing_queue: Queue[FifoEvent]):
         pass
 
     def process_event(self, incoming_event: FifoEvent, incoming_queue_size: int,

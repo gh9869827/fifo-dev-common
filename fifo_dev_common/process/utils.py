@@ -112,7 +112,7 @@ class FifoAsyncProcessWorkerCallback(ABC):
     """
 
     @abstractmethod
-    def initialize(self):
+    def initialize(self, outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
         """
         Called once before any event or task processing begins.
 
@@ -121,10 +121,14 @@ class FifoAsyncProcessWorkerCallback(ABC):
         ensuring all initialization is complete before event or task processing begins.
 
         This method is called after the asyncio loop has been created.
+
+        Args:
+            outgoing_queue (asyncio.PriorityQueue[FifoEvent]):
+                Queue for sending events/results back to the main process.
         """
 
     @abstractmethod
-    def finalize(self):
+    def finalize(self, outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
         """
         Called once after all event and task processing is complete.
 
@@ -133,6 +137,10 @@ class FifoAsyncProcessWorkerCallback(ABC):
         event/task processing is complete, just before the process terminates.
 
         The asyncio loop remains active when this method is called.
+
+        Args:
+            outgoing_queue (asyncio.PriorityQueue[FifoEvent]):
+                Queue for sending events/results back to the main process.
         """
 
     @abstractmethod
@@ -344,7 +352,7 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         asyncio.set_event_loop(self._loop)
 
         try:
-            self._callback.initialize()
+            self._callback.initialize(self._async_out)
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("[FifoAsyncProcessWorker.initialize] Unhandled exception")
             self._out_queue.put(
@@ -364,7 +372,7 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         _trace("[FifoAsyncProcessWorker.fct:run_until_complete] _out_queue_pusher thread joined")
 
         try:
-            self._callback.finalize()
+            self._callback.finalize(self._async_out)
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("[FifoAsyncProcessWorker.finalize] Unhandled exception")
             self._out_queue.put(
@@ -410,21 +418,29 @@ class FifoSyncProcessWorkerCallback(ABC):
     """
 
     @abstractmethod
-    def initialize(self):
+    def initialize(self, outgoing_queue: Queue[FifoEvent]):
         """
         Called once before event and task processing begins.
 
         Use this method to set up resources, connections, or state needed by the worker.
         This method is invoked in the worker process before any events or tasks are processed.
+
+        Args:
+            outgoing_queue (Queue[FifoEvent]):
+                Queue for sending events/results back to the main process.
         """
 
     @abstractmethod
-    def finalize(self):
+    def finalize(self, outgoing_queue: Queue[FifoEvent]):
         """
         Called once after all event and task processing is complete.
 
         Use this method to clean up resources, connections, or state before the worker exits.
         This method is invoked in the worker process after all threads have finished.
+
+        Args:
+            outgoing_queue (Queue[FifoEvent]):
+                Queue for sending events/results back to the main process.
         """
 
     @abstractmethod
@@ -590,7 +606,7 @@ class FifoSyncProcessWorker:
         _trace("[FifoSyncProcessWorker.fct:run_until_complete] Initializing sync worker")
 
         try:
-            self._callback.initialize()
+            self._callback.initialize(self._out_queue)
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("[FifoSyncProcessWorker.initialize] Unhandled exception")
             self._out_queue.put(
@@ -618,7 +634,7 @@ class FifoSyncProcessWorker:
         _trace("[FifoSyncProcessWorker.fct:run_until_complete] Worker threads joined")
 
         try:
-            self._callback.finalize()
+            self._callback.finalize(self._out_queue)
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("[FifoSyncProcessWorker.finalize] Unhandled exception")
             self._out_queue.put(

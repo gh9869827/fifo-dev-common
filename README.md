@@ -555,6 +555,69 @@ print(f"Position: ({restored.position.x}, {restored.position.y})")        # Outp
 print(f"Priority: {restored.priority}")                                   # Output=77
 ```
 
+In addition to the `FifoEvent` base class, which can be subclassed to create custom events, the `fifo_dev_common` library provides two event classes that already inherit from `FifoEvent` and can be used directly:
+
+#### `FifoEventPoison`
+- **Description:** A sentinel ("poison pill") event used to signal queue consumers to terminate gracefully.
+- **Use Case:** Insert this event into a queue to notify consumers (e.g., threads or processes) to shut down cleanly.
+- **Fields:** Inherits `priority` from `FifoEvent`. No additional fields.
+
+#### `FifoEventException`
+- **Description:** A serializable event for transporting exception details across threads, processes, or network boundaries.
+- **Use Case:** Use this event to report exceptions in distributed or concurrent systems.
+- **Fields:**
+  - `class_name`: Name of the exception class (e.g., `"RuntimeError"`).
+  - `message`: Exception message.
+  - `source`: *(Optional)* Identifier of the source (such as thread or worker name).
+
+The `fifo_dev_common` library also includes another class that inherits from `FifoEvent`, but is intended to be used as a base class for creating standardized result events:
+
+#### `FifoEventResultBase`
+- **Description:** Abstract base class for reporting operation outcomes with error codes and optional messages.
+- **Use Case:** Subclass this to define application-specific result events.
+- **Fields:**
+  - `code`: An `ErrorCode` value (e.g., `OK`, `ERROR`).
+  - `message`: *(Optional)* Descriptive message providing additional context.
+
+You can subclass `FifoEventResultBase` to create strongly-typed result events tailored to the application's needs.  
+Each subclass must define a unique `event_id` and `default_priority`, and may include additional fields if needed.
+
+**Example:**
+
+```python
+from fifo_dev_common.event.fifo_event import (
+    FifoEventResultBase, ErrorCode, FifoEvent
+)
+
+@FifoEvent.register
+class FifoEventMyResult(FifoEventResultBase):
+    event_id = 100
+    default_priority = 10
+
+# Usage
+# Success
+result = FifoEventMyResult(code=ErrorCode.OK, message="Operation completed successfully")
+
+# Error
+result = FifoEventMyResult(code=ErrorCode.ERROR, message="Database connection failed")
+```
+
+Result event can be extended with custom fields.  
+Be sure to use the `@dataclass(kw_only=True)` and `@serializable` decorators when adding new serializable fields:
+
+```python
+from dataclasses import dataclass, field
+from fifo_dev_common.serialization.fifo_serialization import serializable
+
+@FifoEvent.register
+@serializable
+@dataclass(kw_only=True)
+class FifoEventMyCustomResult(FifoEventResultBase):
+    event_id = 101
+    default_priority = 5
+    details: str = field(default="", metadata={"format": "S"})
+```
+
 ---
 
 ### `fifo_dev_common.logging.logger`

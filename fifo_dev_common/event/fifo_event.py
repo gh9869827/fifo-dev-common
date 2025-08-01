@@ -386,9 +386,14 @@ class ErrorCode(IntEnum):
 
         ERROR (1):
             Generic error occurred. Use the message field for specific details.
+
+        EXCEPTION (2):
+            An unhandled exception occurred. See the message for details. Note that
+            a corresponding FifoEventException may not always be sent separately.
     """
     OK = 0
     ERROR = 1
+    EXCEPTION = 2
 
 
 @serializable

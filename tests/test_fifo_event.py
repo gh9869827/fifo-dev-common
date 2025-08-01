@@ -6,7 +6,12 @@ import struct
 import threading
 from typing import ClassVar, cast
 import pytest
-from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventException
+from fifo_dev_common.event.fifo_event import (
+    ErrorCode,
+    FifoEvent,
+    FifoEventException,
+    FifoEventResultBase
+)
 from fifo_dev_common.serialization.fifo_serialization import serializable
 
 # pylint: disable=protected-access
@@ -416,3 +421,19 @@ def test_valueerror_when_neither_exception_nor_both_class_name_and_message():
     # Only message
     with pytest.raises(ValueError, match="Both class_name and message must be provided when exception is not set"):
         FifoEventException(message="Test")
+
+
+def test_event_results():
+
+    @FifoEvent.register
+    class FifoEventMyResult(FifoEventResultBase):
+        event_id = 100
+        default_priority = 10
+
+    event = FifoEventMyResult(ErrorCode.ERROR, "error")
+
+    sock1, sock2 = socket.socketpair()
+    event.serialize_to_socket(sock1)
+    event2 = cast(FifoEventMyResult, FifoEvent.deserialize_from_socket(sock2))
+    assert event2.code is ErrorCode.ERROR
+    assert event2.message == "error"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
+from enum import IntEnum
 import struct
 from typing import Any, Type, TypeVar, ClassVar
 import threading
@@ -369,3 +370,78 @@ class FifoEventException(FifoEvent):
                                  "is not set")
             self.class_name = class_name
             self.message = message
+
+
+class ErrorCode(IntEnum):
+    """
+    Enumeration of standard error codes for FifoEventResultBase and its subclasses.
+
+    This enum provides a standardized way to categorize operation results across
+    different event types. Additional error codes can be added as needed for
+    specific use cases.
+
+    Values:
+        OK (0):
+            Operation completed successfully with no errors.
+
+        ERROR (1):
+            Generic error occurred. Use the message field for specific details.
+    """
+    OK = 0
+    ERROR = 1
+
+
+@serializable
+@dataclass(kw_only=True)
+class FifoEventResultBase(FifoEvent):
+    """
+    Abstract base class for result events that report operation outcomes with error codes.
+
+    This class provides a standardized structure for events that need to communicate
+    success/failure status along with optional descriptive messages. It is designed
+    to be subclassed, with each subclass defining its own event_id and default_priority.
+
+    Note: This class is not registered with @FifoEvent.register because it lacks
+    an event_id and is intended only as a base class.
+
+    Attributes:
+        code (ErrorCode):
+            [Serializable] The result status of the operation.
+
+        message (str | None):
+            [Serializable] Optional descriptive message providing additional context
+            about the result, especially useful for error cases.
+
+    Usage:
+        @FifoEvent.register
+        class FifoEventMyResult(FifoEventResultBase):
+            event_id = 100
+            default_priority = 10
+
+        # Success case
+        result = FifoEventMyResult(ErrorCode.OK, "Operation completed successfully")
+
+        # Error case
+        result = FifoEventMyResult(ErrorCode.ERROR, "Database connection failed")
+    """
+
+    code: ErrorCode = field(metadata={"format": "E<B>", "ptype": ErrorCode})
+    message: str | None = field(default=None, metadata={"format": "?S"})
+
+    def __init__(self, code: ErrorCode, message: str | None = None, priority: int = -1):
+        """
+        Initialize a FifoEventResultBase with result status and optional message.
+
+        Args:
+            code (ErrorCode):
+                The result status of the operation.
+
+            message (str, optional):
+                Optional descriptive message providing additional context.
+
+            priority (int, optional):
+                Event priority. If set to -1 (default), the class's default_priority is used.
+        """
+        super().__init__(priority=priority)
+        self.code = code
+        self.message = message

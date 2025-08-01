@@ -557,8 +557,8 @@ print(f"Priority: {restored.priority}")                                   # Outp
 
 In addition to the `FifoEvent` base class, which can be subclassed to create custom events, the `fifo_dev_common` library provides two event classes that already inherit from `FifoEvent` and can be used directly:
 
-#### `FifoEventPoison`
-- **Description:** A sentinel ("poison pill") event used to signal queue consumers to terminate gracefully.
+#### `FifoEventShutdown`
+- **Description:** A sentinel event used to signal queue consumers to terminate gracefully.
 - **Use Case:** Insert this event into a queue to notify consumers (e.g., threads or processes) to shut down cleanly.
 - **Fields:** Inherits `priority` from `FifoEvent`. No additional fields.
 

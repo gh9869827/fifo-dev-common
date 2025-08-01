@@ -250,19 +250,19 @@ class FifoEvent(FifoSerializable):
 
 @FifoEvent.register
 @serializable
-class FifoEventPoison(FifoEvent):
+class FifoEventShutdown(FifoEvent):
     """
-    Sentinel event used as a "poison pill" for queues or pipelines.
+    Sentinel event used to signal termination in queues or pipelines.
 
-    In concurrent or asynchronous systems, inserting a FifoEventPoison into a queue
+    In concurrent or asynchronous systems, inserting a FifoEventShutdown into a queue
     signals consumers to terminate gracefully. This event carries no data payload, 
     only an event ID and optional priority.
 
     Usage:
-        queue.put(FifoEventPoison())
+        queue.put(FifoEventShutdown())
         # Consumer:
         event = queue.get()
-        if isinstance(event, FifoEventPoison):
+        if isinstance(event, FifoEventShutdown):
             # Clean shutdown
             break
     """

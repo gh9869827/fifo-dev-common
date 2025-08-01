@@ -7,7 +7,7 @@ from threading import Thread
 from multiprocessing import Process
 from typing import TYPE_CHECKING
 from fifo_dev_common.event.fifo_event import (
-    FifoEventPoison,
+    FifoEventShutdown,
     FifoEvent,
     FifoEventException,
 )
@@ -198,7 +198,7 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
     Usage:
         - Instantiate with input/output queues and a callback implementing
           FifoAsyncProcessWorkerCallback.
-        - Call run_until_complete() to start processing events until a `FifoEventPoison`
+        - Call run_until_complete() to start processing events until a `FifoEventShutdown`
           is received.
 
     Attributes:
@@ -254,7 +254,7 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         """
         Thread target: Moves events from the interprocess input queue to the internal async queue.
 
-        Stops when a FifoEventPoison is received, which is forwarded to the internal async queue
+        Stops when a FifoEventShutdown is received, which is forwarded to the internal async queue
         to cascade the shutdown process.
         """
         assert self._loop is not None
@@ -264,8 +264,8 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
             event = self._in_queue.get()
             asyncio.run_coroutine_threadsafe(self._async_in.put(event), self._loop)
             _trace("[FifoAsyncProcessWorker.thread:_in_queue_puller] Event pulled from main process")  # pylint: disable=line-too-long
-            if isinstance(event, FifoEventPoison):
-                _trace("[FifoAsyncProcessWorker.thread:_in_queue_puller] Poison event received; stopping thread")  # pylint: disable=line-too-long
+            if isinstance(event, FifoEventShutdown):
+                _trace("[FifoAsyncProcessWorker.thread:_in_queue_puller] Shutdown event received; stopping thread")  # pylint: disable=line-too-long
                 break
 
     def _out_queue_pusher(self) -> None:
@@ -273,7 +273,7 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         Thread target: Moves events from the internal async output queue to the interprocess
         output queue.
 
-        Stops when a FifoEventPoison is received, which is forwarded to the interprocess output
+        Stops when a FifoEventShutdown is received, which is forwarded to the interprocess output
         queue to cascade the shutdown process.
         """
         assert self._loop is not None
@@ -283,8 +283,8 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
             event = asyncio.run_coroutine_threadsafe(self._async_out.get(), self._loop).result()
             self._out_queue.put(event)
             _trace("[FifoAsyncProcessWorker.thread:_out_queue_pusher] Event sent to main process")
-            if isinstance(event, FifoEventPoison):
-                _trace("[FifoAsyncProcessWorker.thread:_out_queue_pusher] Poison event sent; stopping thread")  # pylint: disable=line-too-long
+            if isinstance(event, FifoEventShutdown):
+                _trace("[FifoAsyncProcessWorker.thread:_out_queue_pusher] Shutdown event sent; stopping thread")  # pylint: disable=line-too-long
                 break
 
         self._loop.call_soon_threadsafe(self._event_queue_pusher_done.set)
@@ -294,7 +294,7 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         Main asynchronous event loop.
 
         Continuously retrieves events from the internal async input queue and calls the callback's
-        loop method. Stops when a FifoEventPoison is received and waits for the output pusher
+        loop method. Stops when a FifoEventShutdown is received and waits for the output pusher
         thread to finish, signaling that there are no more asyncio operations being processed or
         pending.
         """
@@ -314,9 +314,9 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
                 except asyncio.TimeoutError:
                     event = None
 
-            if isinstance(event, FifoEventPoison):
+            if isinstance(event, FifoEventShutdown):
                 await self._async_out.put(event)
-                _trace("[FifoAsyncProcessWorker.fct:_process_loop] Poison event processed; shutting down event loop")  # pylint: disable=line-too-long
+                _trace("[FifoAsyncProcessWorker.fct:_process_loop] Shutdown event processed; shutting down event loop")  # pylint: disable=line-too-long
                 break
 
             try:
@@ -337,7 +337,7 @@ class FifoAsyncProcessWorker(FifoProcessWorkerBase):
         """
         Starts the worker process event loop and associated threads.
 
-        Runs until a poison event is received, then joins threads and closes the event loop.
+        Runs until a Shutdown event is received, then joins threads and closes the event loop.
         """
         _trace("[FifoAsyncProcessWorker] Initializing async worker")
         self._loop = asyncio.new_event_loop()
@@ -392,8 +392,8 @@ class FifoSyncProcessWorkerCallback(ABC):
         - The event processing thread waits for incoming events and calls `process_event` whenever
           an event arrives. This thread blocks until an event is available.
         - The task processing thread runs `process_task` continuously. It must process a single task
-          and return promptly, so that the thread can be interrupted and exit when a poison event is
-          received.
+          and return promptly, so that the thread can be interrupted and exit when a shutdown event
+          is received.
 
     Lifecycle hooks:
         - `initialize()` is called once before any event or task processing begins, allowing
@@ -457,7 +457,7 @@ class FifoSyncProcessWorkerCallback(ABC):
         Called repeatedly by the task processing thread to perform one unit of work.
 
         Should process a single task and return promptly, so the thread can exit when
-        a poison event is received.
+        a shutdown event is received.
 
         Args:
             outgoing_queue (Queue[FifoEvent]):
@@ -478,12 +478,12 @@ class FifoSyncProcessWorker:
         - One thread continuously calls the callback's `process_task` method to perform periodic
           or background tasks.
 
-    The worker stops when a poison event is received, ensuring all threads exit cleanly.
+    The worker stops when a shutdown event is received, ensuring all threads exit cleanly.
 
     Usage:
         - Instantiate with input/output queues and a callback implementing
           FifoSyncProcessWorkerCallback.
-        - Call `run_until_complete()` to start processing events and tasks until a poison event is
+        - Call `run_until_complete()` to start processing events and tasks until a shutdown event is
           received.
 
     Attributes:
@@ -525,7 +525,7 @@ class FifoSyncProcessWorker:
         Thread target: Reads events from the interprocess input queue and puts them into the local
         priority queue.
 
-        Stops when a FifoEventPoison is received, which is forwarded to the local priority queue
+        Stops when a FifoEventShutdown is received, which is forwarded to the local priority queue
         to cascade the shutdown process.
         """
         _trace("[FifoSyncProcessWorker.thread:_priority_in_reader] Thread running")
@@ -533,8 +533,8 @@ class FifoSyncProcessWorker:
             event = self._in_queue.get()
             self._local_priority_queue.put(event)
             _trace("[FifoSyncProcessWorker.thread:_priority_in_reader] Event queued for processing")
-            if isinstance(event, FifoEventPoison):
-                _trace("[FifoSyncProcessWorker.thread:_priority_in_reader] Poison event received; stopping thread")  # pylint: disable=line-too-long
+            if isinstance(event, FifoEventShutdown):
+                _trace("[FifoSyncProcessWorker.thread:_priority_in_reader] Shutdown event received; stopping thread")  # pylint: disable=line-too-long
                 break
 
     def _priority_event_processor(self):
@@ -542,19 +542,21 @@ class FifoSyncProcessWorker:
         Thread target: Processes events from the local priority queue by calling the callback's
         `process_event` method.
 
-        Stops when a FifoEventPoison is received, signals the stop event, and forwards the poison
-        event to the output queue to cascade the shutdown process.
+        Stops when a FifoEventShutdown is received, signals the stop event, and forwards the
+        shutdown event to the output queue to cascade the shutdown process.
         """
         _trace("[FifoSyncProcessWorker.thread:_priority_event_processor] Thread running")
         while True:
             event = self._local_priority_queue.get()
-            if isinstance(event, FifoEventPoison):
+            if isinstance(event, FifoEventShutdown):
                 self._stop_event.set()
                 self._out_queue.put(event)
-                _trace("[FifoSyncProcessWorker.thread:_priority_event_processor] Poison event processed; stopping thread")  # pylint: disable=line-too-long
+                _trace("[FifoSyncProcessWorker.thread:_priority_event_processor] Shutdown event processed; stopping thread")  # pylint: disable=line-too-long
                 break
             try:
-                self._callback.process_event(event, self._local_priority_queue.qsize(), self._out_queue)
+                self._callback.process_event(
+                    event, self._local_priority_queue.qsize(), self._out_queue
+                )
             except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("[FifoSyncProcessWorker.process_event] Unhandled exception")
                 self._out_queue.put(
@@ -566,7 +568,7 @@ class FifoSyncProcessWorker:
         Thread target: Continuously calls the callback's `process_task` method to perform periodic
         or background tasks.
 
-        Stops when the stop event is set (after a poison event is received).
+        Stops when the stop event is set (after a shutdown event is received).
         """
         _trace("[FifoSyncProcessWorker.thread:_out_task_loop] Thread running")
         while not self._stop_event.is_set():
@@ -581,7 +583,7 @@ class FifoSyncProcessWorker:
 
     def run_until_complete(self):
         """
-        Starts all threads and processes events and tasks until a poison event is received.
+        Starts all threads and processes events and tasks until a shutdown event is received.
 
         Joins all threads to ensure clean shutdown.
         """
@@ -645,7 +647,7 @@ class FifoProcessManager:
     and the worker process.
 
     It provides async methods for sending and receiving events, and ensures clean shutdown by
-    propagating poison events and joining all threads and the process.
+    propagating shutdown events and joining all threads and the process.
 
     Usage:
         - Instantiate with an event loop and a worker callback (async or sync).
@@ -743,20 +745,20 @@ class FifoProcessManager:
 
     async def stop(self) -> None:
         """
-        Stop the worker process by sending a poison event and waiting for shutdown.
+        Stop the worker process by sending a shutdown event and waiting for completion.
 
-        Sends a poison event to the worker process and waits until the poison event is received
-        back from the worker, indicating shutdown is complete.
+        Sends a shutdown event to the worker process and waits until it is echoed back,
+        indicating that shutdown has completed successfully.
         """
-        _trace("[FifoProcessManager.fct:stop] Sending FifoEventPoison to request shutdown")
-        await self._async_in.put(FifoEventPoison())
+        _trace("[FifoProcessManager.fct:stop] Sending FifoEventShutdown to request shutdown")
+        await self._async_in.put(FifoEventShutdown())
 
         _trace("[FifoProcessManager.fct:stop] Awaiting worker shutdown confirmation")
         while True:
             event: FifoEvent = await self._async_out.get()
-            if isinstance(event, FifoEventPoison):
+            if isinstance(event, FifoEventShutdown):
                 break
-        _trace("[FifoProcessManager.fct:stop] Received FifoEventPoison confirmation from worker")
+        _trace("[FifoProcessManager.fct:stop] Received FifoEventShutdown confirmation from worker")
 
     def join(self) -> None:
         """
@@ -802,7 +804,7 @@ class FifoProcessManager:
         """
         Thread target: Moves events from the async input queue to the interprocess input queue.
 
-        Stops when a FifoEventPoison is received, which is forwarded to the interprocess input
+        Stops when a FifoEventShutdown is received, which is forwarded to the interprocess input
         queue to cascade the shutdown process.
         """
         _trace("[FifoProcessManager.thread:_in_queue_pusher] Thread running")
@@ -810,15 +812,15 @@ class FifoProcessManager:
             event = asyncio.run_coroutine_threadsafe(self._async_in.get(), self._loop).result()
             self._in_queue.put(event)
             _trace("[FifoProcessManager.thread:_in_queue_pusher] Forwarded event to worker process")
-            if isinstance(event, FifoEventPoison):
-                _trace("[FifoProcessManager.thread:_in_queue_pusher] Poison event forwarded; stopping thread")  # pylint: disable=line-too-long
+            if isinstance(event, FifoEventShutdown):
+                _trace("[FifoProcessManager.thread:_in_queue_pusher] Shutdown event forwarded; stopping thread")  # pylint: disable=line-too-long
                 break
 
     def _out_queue_puller(self) -> None:
         """
         Thread target: Moves events from the interprocess output queue to the async output queue.
 
-        Stops when a FifoEventPoison is received, which is forwarded to the async output queue to
+        Stops when a FifoEventShutdown is received, which is forwarded to the async output queue to
         cascade the shutdown process.
         """
         _trace("[FifoProcessManager.thread:_out_queue_puller] Thread running")
@@ -826,6 +828,6 @@ class FifoProcessManager:
             event = self._out_queue.get()
             asyncio.run_coroutine_threadsafe(self._async_out.put(event), self._loop)
             _trace("[FifoProcessManager.thread:_out_queue_puller] Received event from worker process")  # pylint: disable=line-too-long
-            if isinstance(event, FifoEventPoison):
-                _trace("[FifoProcessManager.thread:_out_queue_puller] Poison event received; stopping thread")  # pylint: disable=line-too-long
+            if isinstance(event, FifoEventShutdown):
+                _trace("[FifoProcessManager.thread:_out_queue_puller] Shutdown event received; stopping thread")  # pylint: disable=line-too-long
                 break

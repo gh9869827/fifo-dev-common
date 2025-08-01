@@ -5,7 +5,7 @@ import time
 import pytest
 from fifo_dev_common.event.fifo_event import (
     FifoEvent,
-    FifoEventPoison,
+    FifoEventShutdown,
     FifoEventException,
 )
 from fifo_dev_common.process.utils import (
@@ -148,12 +148,12 @@ def test_sync_process_manager_echo():
 
 
 @pytest.mark.asyncio
-async def test_async_process_manager_poison_event():
+async def test_async_process_manager_shutdown_event():
     loop = asyncio.get_event_loop()
     process = FifoProcessManager(loop, DemoFifoAsyncProcessWorkerCallback())
     process.start()
 
-    await process.send(FifoEventPoison())
+    await process.send(FifoEventShutdown())
     await process.stop()
     process.join()
 

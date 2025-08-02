@@ -1,10 +1,11 @@
 from __future__ import annotations
 from abc import ABC
 import abc
-from dataclasses import Field, fields
+from dataclasses import Field, field, fields
 from enum import Enum
 import struct
 from typing import Any, Self, Tuple, Type, TypeVar
+import uuid
 import numpy as np
 from numpy.typing import NDArray
 from fifo_dev_common.socket.socket_utils import SupportsRecvInto, SupportsSendAll, recv_all
@@ -24,6 +25,35 @@ _NUMPY_DTYPES: dict[str, np.dtype[Any]] = {
 _ALLOWED_STRUCT_FORMAT_CHARS = {
     "b", "B", "h", "H", "i", "I", "l", "L", "q", "Q", "e", "f", "d", "y",
 }
+
+
+def field_UUID(**kwargs: Any) -> Field[uuid.UUID]:
+    """Return a :func:`dataclasses.field` configured for :class:`uuid.UUID` values.
+
+    The returned field uses per-field custom serialization metadata to encode a
+    UUID directly as its 16 raw bytes without requiring a global registry or
+    wrapper class.
+    """
+
+    def _serialize(obj: uuid.UUID, buffer: bytearray, idx: int) -> int:
+        buffer[idx : idx + 16] = obj.bytes
+        return idx + 16
+
+    def _deserialize(buffer: bytearray, idx: int) -> tuple[uuid.UUID, int]:
+        return uuid.UUID(bytes=bytes(buffer[idx : idx + 16])), idx + 16
+
+    def _bytelength(_: uuid.UUID) -> int:
+        return 16
+
+    return field(
+        metadata={
+            "serialize": _serialize,
+            "deserialize": _deserialize,
+            "bytelength": _bytelength,
+        },
+        **kwargs,
+    )
+
 
 def compile_field(field: Field[Any]) -> FieldSpecCompiled:
     """
@@ -109,7 +139,23 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
 
     struct_format = field.metadata.get("format")
     ptype = field.metadata.get("ptype")
+    serialize_fn = field.metadata.get("serialize")
+    deserialize_fn = field.metadata.get("deserialize")
+    bytelength_fn = field.metadata.get("bytelength")
     name = field.name
+
+    if any(x is not None for x in (serialize_fn, deserialize_fn, bytelength_fn)):
+        if struct_format is not None or ptype is not None:
+            raise ValueError("Cannot specify 'format' or 'ptype' with custom serialization callables")
+        if not (
+            callable(serialize_fn)
+            and callable(deserialize_fn)
+            and callable(bytelength_fn)
+        ):
+            raise ValueError(
+                "Custom field requires callable 'serialize', 'deserialize', and 'bytelength'"
+            )
+        return FieldSpecCompiledCustom(name, serialize_fn, deserialize_fn, bytelength_fn)
 
     if struct_format is not None:
         if struct_format[0] == "[":
@@ -333,6 +379,33 @@ class FieldSpecCompiled(ABC):
             int:
                 The byte size needed for serialization of this field.
         """
+
+
+class FieldSpecCompiledCustom(FieldSpecCompiled):
+    """Field handler that delegates to custom callables supplied via metadata."""
+
+    def __init__(
+        self,
+        name: str,
+        serialize_fn: Any,
+        deserialize_fn: Any,
+        bytelength_fn: Any,
+    ) -> None:
+        super().__init__(name)
+        self._serialize_fn = serialize_fn
+        self._deserialize_fn = deserialize_fn
+        self._bytelength_fn = bytelength_fn
+
+    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        value = getattr(class_obj, self.name)
+        return self._serialize_fn(value, buffer, idx)
+
+    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+        return self._deserialize_fn(buffer, idx)
+
+    def serialized_byte_size(self, class_obj: Any) -> int:
+        value = getattr(class_obj, self.name)
+        return self._bytelength_fn(value)
 
 
 class FieldSpecCompiledBasic(FieldSpecCompiled):
@@ -2137,9 +2210,11 @@ def serializable(cls: C) -> C:
     """
     compiled_fields: list[FieldSpecCompiled] = []
     for f in fields(cls):
-        # Only serialize fields with 'format' or 'ptype' in metadata
+        # Only serialize fields with serialization-related metadata
         meta = getattr(f, "metadata", None)
-        if meta and ("format" in meta or "ptype" in meta):
+        if meta and any(
+            k in meta for k in ("format", "ptype", "serialize", "deserialize", "bytelength")
+        ):
             compiled_fields.append(compile_field(f))
 
     setattr(cls, "_fifo_compiled_fields", compiled_fields)

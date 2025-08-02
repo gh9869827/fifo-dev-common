@@ -11,9 +11,9 @@ from numpy.typing import NDArray
 import uuid
 from fifo_dev_common.serialization.fifo_serialization import (
     FifoSerializable,
+    field_meta_serialize_handler_uuid,
     serializable,
     compile_field,
-    field_UUID,
 )
 
 
@@ -589,7 +589,7 @@ def test_optional_string_fixed_roundtrip() -> None:
 @serializable
 @dataclass
 class TestUUID(FifoSerializable):
-    uid: uuid.UUID = field_UUID()
+    uid: uuid.UUID = field(metadata=field_meta_serialize_handler_uuid())
 
 
 def test_custom_uuid_roundtrip() -> None:
@@ -602,13 +602,25 @@ def test_custom_uuid_roundtrip() -> None:
 
 
 def test_compile_field_custom_errors() -> None:
-    ser = lambda v, b, i: i
+
+    def _serialize(obj: bytes, buffer: bytearray, idx: int) -> int:
+        _, _ = obj, buffer
+        return idx
+
+    def _deserialize(buffer: bytearray, idx: int) -> tuple[int, int]:
+        _ = buffer
+        return 0, idx
+
+    def _bytelength(_: int) -> int:
+        return 0
+
     # Missing deserialize
     mock_field1 = SimpleNamespace(
-        name="x", metadata={"serialize": ser, "bytelength": lambda _v: 0}
+        name="x", metadata={"serialize": _serialize, "bytelength": _bytelength}
     )
     with pytest.raises(
-        ValueError, match="Custom field requires callable 'serialize', 'deserialize', and 'bytelength'"
+        ValueError,
+        match="Custom field requires callable 'serialize', 'deserialize', and 'bytelength'"
     ):
         compile_field(mock_field1)  # type: ignore[arg-type]
 
@@ -617,9 +629,9 @@ def test_compile_field_custom_errors() -> None:
         name="x",
         metadata={
             "format": "I",
-            "serialize": ser,
-            "deserialize": lambda b, i: (0, i),
-            "bytelength": lambda _v: 4,
+            "serialize": _serialize,
+            "deserialize": _deserialize,
+            "bytelength": _bytelength,
         },
     )
     with pytest.raises(

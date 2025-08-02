@@ -1,10 +1,10 @@
 from __future__ import annotations
 from abc import ABC
 import abc
-from dataclasses import Field, field, fields
+from dataclasses import Field, fields
 from enum import Enum
 import struct
-from typing import Any, Self, Tuple, Type, TypeVar
+from typing import Any, Self, Tuple, Type, TypeVar, Callable, TypedDict, cast
 import uuid
 import numpy as np
 from numpy.typing import NDArray
@@ -26,15 +26,73 @@ _ALLOWED_STRUCT_FORMAT_CHARS = {
     "b", "B", "h", "H", "i", "I", "l", "L", "q", "Q", "e", "f", "d", "y",
 }
 
-
-def field_UUID(**kwargs: Any) -> Field[uuid.UUID]:
-    """Return a :func:`dataclasses.field` configured for :class:`uuid.UUID` values.
-
-    The returned field uses per-field custom serialization metadata to encode a
-    UUID directly as its 16 raw bytes without requiring a global registry or
-    wrapper class.
+class FieldMetaDataSerializeHandlers(TypedDict):
     """
+    TypedDict specifying the required callables for custom per-field serialization.
 
+    This structure is used in field metadata to provide custom serialization,
+    deserialization, and byte size calculation logic for a dataclass field.
+
+    Keys:
+        serialize (Callable[[Any, bytearray, int], int]):
+            Function to serialize the field value into a buffer.
+
+            Args:
+                obj (Any):
+                    The field value to serialize.
+                buffer (bytearray):
+                    The buffer into which to serialize the value.
+                idx (int):
+                    The starting index in the buffer at which to write data.
+
+            Returns:
+                int:
+                    The updated buffer index after writing the field data.
+
+        deserialize (Callable[[bytearray, int], tuple[Any, int]]):
+            Function to deserialize the field value from a buffer.
+
+            Args:
+                buffer (bytearray):
+                    The buffer containing serialized data.
+                idx (int):
+                    The starting index in the buffer at which to read data.
+
+            Returns:
+                tuple[Any, int]:
+                    - The deserialized field value.
+                    - The updated buffer index after reading the field data.
+
+        bytelength (Callable[[Any], int]):
+            Function to compute the serialized byte size of the field value.
+
+            Args:
+                obj (Any):
+                    The field value whose serialized size should be computed.
+
+            Returns:
+                int:
+                    The number of bytes required to serialize the field value.
+    """
+    serialize: Callable[[Any, bytearray, int], int]
+    deserialize: Callable[[bytearray, int], tuple[Any, int]]
+    bytelength: Callable[[Any], int]
+
+
+def field_meta_serialize_handler_uuid() -> FieldMetaDataSerializeHandlers:
+    """
+    Return the metadata dictionary containing `serialize`, `deserialize`, and `bytelength`
+    callables for use in a dataclasses.field metadata, configured for (de)serializing `uuid.UUID`
+    values.
+
+    The custom serialization metadata encodes a UUID directly as its 16 raw bytes without
+    requiring a global registry or wrapper class.
+
+    Returns:
+        FieldMetaDataSerializeHandlers:
+            A dictionary with callable handlers for serializing, deserializing, and
+            computing the byte size of a `uuid.UUID` field.
+    """
     def _serialize(obj: uuid.UUID, buffer: bytearray, idx: int) -> int:
         buffer[idx : idx + 16] = obj.bytes
         return idx + 16
@@ -45,14 +103,11 @@ def field_UUID(**kwargs: Any) -> Field[uuid.UUID]:
     def _bytelength(_: uuid.UUID) -> int:
         return 16
 
-    return field(
-        metadata={
-            "serialize": _serialize,
-            "deserialize": _deserialize,
-            "bytelength": _bytelength,
-        },
-        **kwargs,
-    )
+    return {
+        "serialize": _serialize,
+        "deserialize": _deserialize,
+        "bytelength": _bytelength,
+    }
 
 
 def compile_field(field: Field[Any]) -> FieldSpecCompiled:
@@ -139,14 +194,25 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
 
     struct_format = field.metadata.get("format")
     ptype = field.metadata.get("ptype")
-    serialize_fn = field.metadata.get("serialize")
-    deserialize_fn = field.metadata.get("deserialize")
-    bytelength_fn = field.metadata.get("bytelength")
+    serialize_fn = cast(
+        Callable[[Any, bytearray, int], int],
+        field.metadata.get("serialize")
+    )
+    deserialize_fn = cast(
+        Callable[[bytearray, int], tuple[Any, int]],
+        field.metadata.get("deserialize")
+    )
+    bytelength_fn = cast(
+        Callable[[Any], int],
+        field.metadata.get("bytelength")
+    )
     name = field.name
 
     if any(x is not None for x in (serialize_fn, deserialize_fn, bytelength_fn)):
         if struct_format is not None or ptype is not None:
-            raise ValueError("Cannot specify 'format' or 'ptype' with custom serialization callables")
+            raise ValueError(
+                "Cannot specify 'format' or 'ptype' with custom serialization callables"
+            )
         if not (
             callable(serialize_fn)
             and callable(deserialize_fn)
@@ -382,28 +448,130 @@ class FieldSpecCompiled(ABC):
 
 
 class FieldSpecCompiledCustom(FieldSpecCompiled):
-    """Field handler that delegates to custom callables supplied via metadata."""
+    """
+    FieldSpecCompiled subclass for fields with custom serialization callables.
+
+    This class handles fields that define their own serialization, deserialization,
+    and byte size computation logic via callable functions provided in the field's
+    metadata. It delegates all operations to these custom functions, allowing
+    arbitrary types to be serialized without global registration or wrapper classes.
+
+    The custom callables are expected to have the following signatures:
+        - serialize(obj, buffer: bytearray, idx: int) -> int
+        - deserialize(buffer: bytearray, idx: int) -> tuple[Any, int]
+        - bytelength(obj) -> int
+
+    Attributes:
+        _serialize_fn (Callable[[Any, bytearray, int], int]):
+            Function to serialize the field value into a buffer.
+
+        _deserialize_fn (Callable[[bytearray, int], tuple[Any, int]]):
+            Function to deserialize the field value from a buffer.
+
+        _bytelength_fn (Callable[[Any], int]):
+            Function to compute the serialized byte size of the field value.
+    """
+    _serialize_fn: Callable[[Any, bytearray, int], int]
+    _deserialize_fn: Callable[[bytearray, int], tuple[Any, int]]
+    _bytelength_fn: Callable[[Any], int]
 
     def __init__(
         self,
         name: str,
-        serialize_fn: Any,
-        deserialize_fn: Any,
-        bytelength_fn: Any,
+        serialize_fn: Callable[[Any, bytearray, int], int],
+        deserialize_fn: Callable[[bytearray, int], tuple[Any, int]],
+        bytelength_fn: Callable[[Any], int],
     ) -> None:
+        """
+        Initialize the custom field handler with the provided callable functions.
+
+        Args:
+            name (str):
+                The name of the field.
+
+            serialize_fn (Callable[[Any, bytearray, int], int]):
+                Function to serialize the field value. Must accept (obj, buffer, idx)
+                and return the updated buffer index.
+
+            deserialize_fn (Callable[[bytearray, int], tuple[Any, int]]):
+                Function to deserialize the field value. Must accept (buffer, idx)
+                and return (value, updated_idx).
+
+            bytelength_fn (Callable[[Any], int]):
+                Function to compute serialized byte size. Must accept (obj)
+                and return the byte count.
+        """
         super().__init__(name)
         self._serialize_fn = serialize_fn
         self._deserialize_fn = deserialize_fn
         self._bytelength_fn = bytelength_fn
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize the custom field from `class_obj` into the buffer using the custom function.
+
+        Delegates serialization to the `_serialize_fn` callable provided during initialization.
+
+        Args:
+            class_obj (Any):
+                The instance containing the field value to serialize.
+
+            buffer (bytearray):
+                The buffer into which to serialize data.
+
+            idx (int):
+                The starting index in the buffer at which to write data.
+
+        Returns:
+            int:
+                The updated buffer index after writing the field data.
+
+        Raises:
+            Implementation-specific exceptions if the custom serialization function fails.
+        """
         value = getattr(class_obj, self.name)
         return self._serialize_fn(value, buffer, idx)
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+        """
+        Deserialize the custom field from the buffer using the custom function.
+
+        Delegates deserialization to the `_deserialize_fn` callable provided during initialization.
+
+        Args:
+            buffer (bytearray):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in the buffer at which to read data.
+
+        Returns:
+            tuple[Any, int]:
+                - The deserialized field value.
+                - The updated buffer index after reading the field data.
+
+        Raises:
+            Implementation-specific exceptions if the custom deserialization function fails.
+        """
         return self._deserialize_fn(buffer, idx)
 
     def serialized_byte_size(self, class_obj: Any) -> int:
+        """
+        Compute the byte size required to serialize the custom field using the custom function.
+
+        Delegates size computation to the `_bytelength_fn` callable provided during initialization.
+
+        Args:
+            class_obj (Any):
+                The instance containing the field value.
+
+        Returns:
+            int:
+                The byte size needed for serialization of this field.
+
+        Raises:
+            Implementation-specific exceptions if the custom byte length function fails.
+        """
         value = getattr(class_obj, self.name)
         return self._bytelength_fn(value)
 

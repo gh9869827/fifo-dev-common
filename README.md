@@ -365,7 +365,7 @@ Provides a lightweight, efficient binary serialization framework for Python data
 - Designed for preallocated buffers to maximize performance and minimize allocations.
 - Works well with microcontroller and embedded system data formats as it is a compact binary format prioritizing direct raw serialization with very little overhead.
 
-**Supported Format Strings:**
+#### Supported Format Strings
 
 | Format     | Description                          | Serialization Details                                                  | Notes                                                                 |
 |------------|--------------------------------------|------------------------------------------------------------------------|-----------------------------------------------------------------------|
@@ -387,27 +387,17 @@ Provides a lightweight, efficient binary serialization framework for Python data
 **Note:** Primitive format codes `b B h H i I l L q Q e f d` follow the [Python `struct` module](https://docs.python.org/3/library/struct.html).  
 `y` is a special format for booleans, serialized as a single byte (`0` for `False`, `1` for `True`).
 
-### Custom per-field serialization
+#### Custom per-field serialization
 
 Fields can provide `serialize`, `deserialize`, and `bytelength` callables in their
 `field` metadata. When present, these functions are used instead of a `format` or
-`ptype`, enabling custom types without any global registry. The helper
-`field_UUID()` demonstrates serializing a `uuid.UUID` using this mechanism:
+`ptype`, enabling support for custom types without any global registry or wrapper. The helper
+`field_meta_serialize_handler_uuid()` demonstrates how to serialize a `uuid.UUID`
+using this mechanism, showing a reusable approach: create the three handlers in a
+helper function and return them as a `FieldMetaDataSerializeHandlers` `TypedDict`
+for type-checking.
 
-```python
-import uuid
-from dataclasses import dataclass
-from fifo_dev_common.serialization.fifo_serialization import (
-    FifoSerializable, serializable, field_UUID,
-)
-
-@serializable
-@dataclass
-class MyEvent(FifoSerializable):
-    correlation_id: uuid.UUID = field_UUID()
-```
-
-**Examples:**
+#### Examples
 
 ```python
 from dataclasses import dataclass, field
@@ -472,6 +462,8 @@ sock_server.close()
 sock_client.close()
 ```
 
+---
+
 ```python
 # Example with optional (nullable) elements in the array.
 # `readings` is similar to the previous example, but each element in the list may be None.
@@ -495,6 +487,22 @@ restored, _ = MaybeSensorArray.deserialize_from_bytes(buf, 0)
 # Display the result
 print(f"Restored[0] is None? {restored.readings[0] is None}")  # Output=False
 print(f"Restored[1] is None? {restored.readings[1] is None}")  # Output=True
+```
+
+---
+
+```python
+import uuid
+from dataclasses import dataclass
+from fifo_dev_common.serialization.fifo_serialization import (
+    FifoSerializable, serializable, field_meta_serialize_handler_uuid,
+)
+
+@serializable
+@dataclass
+class MyEvent(FifoSerializable):
+    # Per-field serialization
+    uid: uuid.UUID = field(metadata=field_meta_serialize_handler_uuid())
 ```
 
 ---

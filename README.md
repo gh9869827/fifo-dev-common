@@ -358,10 +358,11 @@ sock_client.close()
 
 Provides a lightweight, efficient binary serialization framework for Python dataclasses.
 
-- `@serializable`: Decorator to enable serialization/deserialization on dataclasses.  
+- `@serializable`: Decorator to enable serialization/deserialization on dataclasses.
 - Supports scalar types, enums, optional fields, arrays, and fixed-length tuples.
-- Uses dataclass `field` metadata (e.g., `format`, `ptype`) for flexible, extensible field definitions.  
-- Designed for preallocated buffers to maximize performance and minimize allocations.  
+- Uses dataclass `field` metadata (e.g., `format`, `ptype`) for flexible, extensible field definitions.
+- Custom per-field (de)serialization via `field` metadata callables (`serialize`, `deserialize`, `bytelength`).
+- Designed for preallocated buffers to maximize performance and minimize allocations.
 - Works well with microcontroller and embedded system data formats as it is a compact binary format prioritizing direct raw serialization with very little overhead.
 
 **Supported Format Strings:**
@@ -385,6 +386,26 @@ Provides a lightweight, efficient binary serialization framework for Python data
 
 **Note:** Primitive format codes `b B h H i I l L q Q e f d` follow the [Python `struct` module](https://docs.python.org/3/library/struct.html).  
 `y` is a special format for booleans, serialized as a single byte (`0` for `False`, `1` for `True`).
+
+### Custom per-field serialization
+
+Fields can provide `serialize`, `deserialize`, and `bytelength` callables in their
+`field` metadata. When present, these functions are used instead of a `format` or
+`ptype`, enabling custom types without any global registry. The helper
+`field_UUID()` demonstrates serializing a `uuid.UUID` using this mechanism:
+
+```python
+import uuid
+from dataclasses import dataclass
+from fifo_dev_common.serialization.fifo_serialization import (
+    FifoSerializable, serializable, field_UUID,
+)
+
+@serializable
+@dataclass
+class MyEvent(FifoSerializable):
+    correlation_id: uuid.UUID = field_UUID()
+```
 
 **Examples:**
 

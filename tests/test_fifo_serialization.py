@@ -8,7 +8,13 @@ import math
 import struct
 import numpy as np
 from numpy.typing import NDArray
-from fifo_dev_common.serialization.fifo_serialization import FifoSerializable, serializable, compile_field
+import uuid
+from fifo_dev_common.serialization.fifo_serialization import (
+    FifoSerializable,
+    serializable,
+    compile_field,
+    field_UUID,
+)
 
 
 def floats_equal_list(list1: list[float],
@@ -578,3 +584,45 @@ def test_optional_string_fixed_roundtrip() -> None:
     assert buf2 == b"\x00"
     restored_none, _ = TestOptionalStringFixed.deserialize_from_bytes(buf2, 0)
     assert restored_none.tag is None
+
+
+@serializable
+@dataclass
+class TestUUID(FifoSerializable):
+    uid: uuid.UUID = field_UUID()
+
+
+def test_custom_uuid_roundtrip() -> None:
+    val = uuid.uuid4()
+    obj = TestUUID(val)
+    buf = bytearray(obj.serialized_byte_size())
+    obj.serialize_to_bytes(buf, 0)
+    restored, _ = TestUUID.deserialize_from_bytes(buf, 0)
+    assert restored.uid == val
+
+
+def test_compile_field_custom_errors() -> None:
+    ser = lambda v, b, i: i
+    # Missing deserialize
+    mock_field1 = SimpleNamespace(
+        name="x", metadata={"serialize": ser, "bytelength": lambda _v: 0}
+    )
+    with pytest.raises(
+        ValueError, match="Custom field requires callable 'serialize', 'deserialize', and 'bytelength'"
+    ):
+        compile_field(mock_field1)  # type: ignore[arg-type]
+
+    # Mixing with format
+    mock_field2 = SimpleNamespace(
+        name="x",
+        metadata={
+            "format": "I",
+            "serialize": ser,
+            "deserialize": lambda b, i: (0, i),
+            "bytelength": lambda _v: 4,
+        },
+    )
+    with pytest.raises(
+        ValueError, match="Cannot specify 'format' or 'ptype' with custom serialization callables"
+    ):
+        compile_field(mock_field2)  # type: ignore[arg-type]

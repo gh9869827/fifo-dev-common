@@ -558,15 +558,28 @@ class FifoSyncProcessWorker:
         Thread target: Processes events from the local priority queue by calling the callback's
         `process_event` method.
 
-        Stops when a FifoEventShutdown is received, signals the stop event, and forwards the
-        shutdown event to the output queue to cascade the shutdown process.
+        Stops when a FifoEventShutdown is received, signals the stop event.
+        
+        The shutdown event is **not** forwarded immediately to `_out_queue` to avoid
+        triggering an early cascade shutdown. Forwarding it too soon would cause
+        `_out_queue_puller` to stop before all pending events were drained, leaving
+        subsequent events stuck in the queue. 
+
+        Instead, `_stop_event` is set, causing `_out_task_loop` (which runs
+        `process_task`) to exit and allowing `run_until_complete` to complete the join
+        sequence.
+
+        As the final action, `run_until_complete` enqueues a `FifoEventShutdown` to
+        `_out_queue`. This ensures that any events emitted by `process_task` after the
+        shutdown signal are still read by the main process: `_out_queue_puller`
+        terminates upon receiving this final shutdown event, which is by design the
+        last event in the queue.
         """
         _trace("[FifoSyncProcessWorker.thread:_priority_event_processor] Thread running")
         while True:
             event = self._local_priority_queue.get()
             if isinstance(event, FifoEventShutdown):
                 self._stop_event.set()
-                self._out_queue.put(event)
                 _trace("[FifoSyncProcessWorker.thread:_priority_event_processor] Shutdown event processed; stopping thread")  # pylint: disable=line-too-long
                 break
             try:
@@ -641,6 +654,8 @@ class FifoSyncProcessWorker:
                 FifoEventException(exception=e, source="FifoSyncProcessWorker.finalize")
             )
         _trace("[FifoSyncProcessWorker.fct:run_until_complete] Callback finalized")
+        self._out_queue.put(FifoEventShutdown())
+        _trace("[FifoSyncProcessWorker.fct:run_until_complete] Shutdown event sent to _out_queue")
         _trace("[FifoSyncProcessWorker.fct:run_until_complete] Sync worker shutdown complete")
 
 def _runner_async(in_queue: Queue[FifoEvent],

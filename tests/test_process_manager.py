@@ -18,10 +18,12 @@ from fifo_dev_common.process.utils import (
     FifoSyncProcessWorkerCallback
 )
 
+# pylint: disable=protected-access
+# pyright: reportPrivateUsage=false
 
 @pytest.fixture(autouse=True)
 def ensure_fifo_event_exception_registered():
-    if FifoEventException.event_id not in FifoEvent._registry: # pyright: ignore[reportPrivateUsage]  # pylint: disable=protected-access
+    if FifoEventException.event_id not in FifoEvent._registry:
         FifoEvent.register(FifoEventException)
 
 if TYPE_CHECKING:
@@ -265,36 +267,37 @@ async def test_send_and_wait_response_ack_error():
     assert manager._received_cid == {}
 
 
+class Worker(FifoSyncProcessWorkerCallback):
+    def initialize(self, outgoing_queue: Queue[FifoEvent]):
+        pass
+
+    def finalize(self, outgoing_queue: Queue[FifoEvent]):
+        pass
+
+    def process_event(
+        self,
+        incoming_event: FifoEvent,
+        incoming_queue_size: int,
+        outgoing_queue: Queue[FifoEvent],
+    ):
+        if isinstance(incoming_event, TestRequest):
+            outgoing_queue.put(
+                TestAck(code=ErrorCode.OK, correlation_id=incoming_event.correlation_id)
+            )
+            outgoing_queue.put(
+                TestDone(code=ErrorCode.OK, correlation_id=incoming_event.correlation_id)
+            )
+        else:
+            outgoing_queue.put(incoming_event)
+
+    def process_task(self, outgoing_queue: Queue[FifoEvent]):
+        pass
+
+
 @pytest.mark.asyncio
 async def test_send_and_wait_response_end_to_end():
     """Verify send_and_wait_response works with a running process manager."""
     loop = asyncio.get_event_loop()
-
-    class Worker(FifoSyncProcessWorkerCallback):
-        def initialize(self, outgoing_queue: Queue[FifoEvent]):
-            pass
-
-        def finalize(self, outgoing_queue: Queue[FifoEvent]):
-            pass
-
-        def process_event(
-            self,
-            incoming_event: FifoEvent,
-            incoming_queue_size: int,
-            outgoing_queue: Queue[FifoEvent],
-        ):
-            if isinstance(incoming_event, TestRequest):
-                outgoing_queue.put(
-                    TestAck(code=ErrorCode.OK, correlation_id=incoming_event.correlation_id)
-                )
-                outgoing_queue.put(
-                    TestDone(code=ErrorCode.OK, correlation_id=incoming_event.correlation_id)
-                )
-            else:
-                outgoing_queue.put(incoming_event)
-
-        def process_task(self, outgoing_queue: Queue[FifoEvent]):
-            pass
 
     manager = FifoProcessManager(loop, Worker())
     manager.start()

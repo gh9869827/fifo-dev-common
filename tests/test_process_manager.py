@@ -2,11 +2,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 import asyncio
 import time
+from uuid import uuid4
 import pytest
 from fifo_dev_common.event.fifo_event import (
     FifoEvent,
     FifoEventShutdown,
     FifoEventException,
+    FifoEventWithCID,
+    FifoEventResultWithCID,
+    ErrorCode,
 )
 from fifo_dev_common.process.utils import (
     FifoProcessManager,
@@ -191,3 +195,113 @@ def test_sync_exception_event_propagation():
     assert isinstance(event, FifoEventException)
     assert event.class_name == "RuntimeError"
     assert event.message == "boom"
+
+
+@FifoEvent.register
+class TestRequest(FifoEventWithCID):
+    event_id = 1100
+    default_priority = 10
+
+
+@FifoEvent.register
+class TestAck(FifoEventResultWithCID):
+    event_id = 1101
+    default_priority = 10
+
+
+@FifoEvent.register
+class TestDone(FifoEventResultWithCID):
+    event_id = 1102
+    default_priority = 10
+
+
+@pytest.mark.asyncio
+async def test_update_received_correlation_id_unmatched():
+    loop = asyncio.get_event_loop()
+    manager = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback())
+    event = TestAck(code=ErrorCode.OK, correlation_id=uuid4())
+
+    await manager._update_received_correlation_id(event)
+    queued = await manager._async_out.get()
+    assert queued is event
+
+
+@pytest.mark.asyncio
+async def test_send_and_wait_response_ack_done():
+    loop = asyncio.get_event_loop()
+    manager = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback())
+    request = TestRequest()
+
+    task = asyncio.create_task(
+        manager.send_and_wait_response(request, TestAck, TestDone)
+    )
+    await asyncio.sleep(0)
+    await manager._update_received_correlation_id(
+        TestAck(code=ErrorCode.OK, correlation_id=request.correlation_id)
+    )
+    assert not task.done()
+    await manager._update_received_correlation_id(
+        TestDone(code=ErrorCode.OK, correlation_id=request.correlation_id)
+    )
+    result = await task
+    assert isinstance(result, TestDone)
+    assert manager._received_cid == {}
+
+
+@pytest.mark.asyncio
+async def test_send_and_wait_response_ack_error():
+    loop = asyncio.get_event_loop()
+    manager = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback())
+    request = TestRequest()
+
+    task = asyncio.create_task(
+        manager.send_and_wait_response(request, TestAck, TestDone)
+    )
+    await asyncio.sleep(0)
+    err_ack = TestAck(code=ErrorCode.ERROR, correlation_id=request.correlation_id)
+    await manager._update_received_correlation_id(err_ack)
+    result = await task
+    assert result is err_ack
+    assert manager._received_cid == {}
+
+
+@pytest.mark.asyncio
+async def test_send_and_wait_response_end_to_end():
+    """Verify send_and_wait_response works with a running process manager."""
+    loop = asyncio.get_event_loop()
+
+    class Worker(FifoSyncProcessWorkerCallback):
+        def initialize(self, outgoing_queue: Queue[FifoEvent]):
+            pass
+
+        def finalize(self, outgoing_queue: Queue[FifoEvent]):
+            pass
+
+        def process_event(
+            self,
+            incoming_event: FifoEvent,
+            incoming_queue_size: int,
+            outgoing_queue: Queue[FifoEvent],
+        ):
+            if isinstance(incoming_event, TestRequest):
+                outgoing_queue.put(
+                    TestAck(code=ErrorCode.OK, correlation_id=incoming_event.correlation_id)
+                )
+                outgoing_queue.put(
+                    TestDone(code=ErrorCode.OK, correlation_id=incoming_event.correlation_id)
+                )
+            else:
+                outgoing_queue.put(incoming_event)
+
+        def process_task(self, outgoing_queue: Queue[FifoEvent]):
+            pass
+
+    manager = FifoProcessManager(loop, Worker())
+    manager.start()
+
+    done = await manager.send_and_wait_response(TestRequest(), TestAck, TestDone)
+    assert isinstance(done, TestDone)
+    assert manager._received_cid == {}
+
+    await manager.stop()
+    manager.join()

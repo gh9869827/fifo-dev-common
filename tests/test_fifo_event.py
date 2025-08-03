@@ -5,12 +5,15 @@ import socket
 import struct
 import threading
 from typing import ClassVar, cast
+from uuid import uuid4
 import pytest
 from fifo_dev_common.event.fifo_event import (
     ErrorCode,
     FifoEvent,
     FifoEventException,
-    FifoEventResultBase
+    FifoEventResultBase,
+    FifoEventResultWithCID,
+    FifoEventWithCID
 )
 from fifo_dev_common.serialization.fifo_serialization import serializable
 
@@ -437,3 +440,61 @@ def test_event_results():
     event2 = cast(FifoEventMyResult, FifoEvent.deserialize_from_socket(sock2))
     assert event2.code is ErrorCode.ERROR
     assert event2.message == "error"
+
+
+def test_event_cid_new():
+
+    @FifoEvent.register
+    class TestEventCID(FifoEventWithCID):
+        event_id = 1001
+        default_priority = 10
+
+    event1 = TestEventCID(correlation_id=None)
+
+    assert event1.correlation_id is not None
+
+    sock1, sock2 = socket.socketpair()
+    event1.serialize_to_socket(sock1)
+
+    event2 = cast(TestEventCID, FifoEvent.deserialize_from_socket(sock2))
+    assert event2.correlation_id == event1.correlation_id
+
+
+def test_event_cid_existing():
+
+    @FifoEvent.register
+    class TestEventCID(FifoEventWithCID):
+        event_id = 1002
+        default_priority = 10
+
+    cid = uuid4()
+    event1 = TestEventCID(correlation_id=cid)
+
+    assert event1.correlation_id == cid
+
+    sock1, sock2 = socket.socketpair()
+    event1.serialize_to_socket(sock1)
+
+    event2 = cast(TestEventCID, FifoEvent.deserialize_from_socket(sock2))
+    assert event2.correlation_id == cid
+
+
+def test_event_result_cid_existing():
+
+    @FifoEvent.register
+    class TestEventResultCID(FifoEventResultWithCID):
+        event_id = 1004
+        default_priority = 10
+
+    cid = uuid4()
+    event1 = TestEventResultCID(code=ErrorCode.ERROR, message="error", correlation_id=cid)
+
+    assert event1.correlation_id == cid
+
+    sock1, sock2 = socket.socketpair()
+    event1.serialize_to_socket(sock1)
+
+    event2 = cast(TestEventResultCID, FifoEvent.deserialize_from_socket(sock2))
+    assert event2.correlation_id == cid
+    assert event2.code == event1.code
+    assert event2.message == event1.message

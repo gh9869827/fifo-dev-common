@@ -4,7 +4,8 @@ from enum import IntEnum
 import struct
 from typing import Any, Type, TypeVar, ClassVar
 import threading
-
+from uuid import UUID, uuid4
+from fifo_dev_common.serialization.fifo_serialization import field_meta_serialize_handler_uuid
 from fifo_dev_common.serialization.fifo_serialization import FifoSerializable, serializable
 from fifo_dev_common.socket.socket_utils import SupportsRecvInto, SupportsSendAll, recv_all
 
@@ -450,3 +451,91 @@ class FifoEventResultBase(FifoEvent):
         super().__init__(priority=priority)
         self.code = code
         self.message = message
+
+
+@serializable
+@dataclass(kw_only=True)
+class FifoEventWithCID(FifoEvent):
+    """
+    Base class for events that include a correlation ID.
+
+    The correlation ID uniquely identifies this event and is intended to be copied into
+    corresponding response events, such as reception acknowledgements or completion
+    acknowledgements. This enables tracking and matching of requests and responses
+    across asynchronous or distributed systems.
+
+    Attributes:
+        correlation_id (UUID):
+            [Serializable] Unique correlation ID for this event, used to match requests and
+            responses.
+    """
+    correlation_id: UUID = field(metadata=field_meta_serialize_handler_uuid())
+
+    def __init__(self,
+                 correlation_id: UUID | None = None,
+                 priority: int = -1):
+        """
+        Initialize a FifoEventWithCID with a correlation ID.
+
+        The correlation ID uniquely identifies this event and is intended to be copied into
+        corresponding response events, such as reception acknowledgements or completion
+        acknowledgements. This enables tracking and matching of requests and responses
+        across asynchronous or distributed systems.
+
+        Args:
+            correlation_id (UUID, optional):
+                Unique correlation ID for this event, used to match requests and responses.
+                If not provided, a new UUID is generated.
+
+            priority (int, optional):
+                Event priority. If set to -1 (default), the class's default_priority is used.
+        """
+        super().__init__(priority=priority)
+        self.correlation_id = correlation_id if correlation_id is not None else uuid4()
+
+
+@serializable
+@dataclass(kw_only=True)
+class FifoEventResultWithCID(FifoEventResultBase):
+    """
+    Base class for result (response) events that include a correlation ID.
+
+    The correlation ID is copied from the corresponding request event, allowing the
+    recipient to match this result event to its original request. This is essential for
+    tracking asynchronous operations and ensuring correct pairing of requests and responses.
+
+    Attributes:
+        correlation_id (UUID):
+            [Serializable] Correlation ID copied from the corresponding request event, used for
+            matching.
+    """
+    correlation_id: UUID = field(metadata=field_meta_serialize_handler_uuid())
+
+    def __init__(self,
+                 code: ErrorCode,
+                 correlation_id: UUID,
+                 message: str | None = None,
+                 priority: int = -1):
+        """
+        Initialize a FifoEventResultWithCID with result status, an optional message, and a
+        correlation ID copied from a corresponding request event.
+
+        The correlation ID is used to match this result event to its request, which is
+        essential for tracking asynchronous operations and ensuring correct pairing of
+        requests and responses.
+
+        Args:
+            code (ErrorCode):
+                The result status of the operation.
+
+            correlation_id (UUID):
+                Correlation ID copied from the corresponding request event, used for matching.
+
+            message (str, optional):
+                Optional descriptive message providing additional context.
+
+            priority (int, optional):
+                Event priority. If set to -1 (default), the class's default_priority is used.
+        """
+        super().__init__(code, message, priority)
+        self.correlation_id = correlation_id

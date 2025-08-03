@@ -599,10 +599,10 @@ In addition to the `FifoEvent` base class, which can be subclassed to create cus
   - `message`: Exception message.
   - `source`: *(Optional)* Identifier of the source (such as thread or worker name).
 
-The `fifo_dev_common` library also includes another class that inherits from `FifoEvent`, but is intended to be used as a base class for creating standardized result events:
+The `fifo_dev_common` library also includes other classes that inherit from `FifoEvent`, but are intended to be used as a base class for creating standardized events:
 
 #### `FifoEventResultBase`
-- **Description:** Abstract base class for reporting operation outcomes with error codes and optional messages.
+- **Description:** Base class for reporting operation outcomes with error codes and optional messages.
 - **Use Case:** Subclass this to define application-specific result events.
 - **Fields:**
   - `code`: An `ErrorCode` value (e.g., `OK`, `ERROR`).
@@ -610,6 +610,22 @@ The `fifo_dev_common` library also includes another class that inherits from `Fi
 
 You can subclass `FifoEventResultBase` to create strongly-typed result events tailored to the application's needs.  
 Each subclass must define a unique `event_id` and `default_priority`, and may include additional fields if needed.
+
+#### `FifoEventWithCID`
+- **Description:** Base class for events that include a correlation ID (`correlation_id: UUID`).
+- **Use Case:** Use as a base class when you need to track and match requests and responses across asynchronous or distributed systems.
+- **How it works:**  
+  - `FifoEventWithCID` assigns a unique correlation ID to each event, which is then copied into the corresponding result event.
+- **Fields:**
+  - `correlation_id`: A UUID used to match requests and responses. Automatically generated if not provided.
+
+#### `FifoEventResultWithCID`
+- **Description:** Base class for result (response) events that include a correlation ID (`correlation_id: UUID`).
+- **Use Case:** Use as a base class for response/result events that need to be matched to their original request.
+- **How it works:**  
+  - `FifoEventResultWithCID` carries the correlation ID from the original request, enabling reliable matching of responses to requests.
+- **Fields:**
+  - `correlation_id`: A UUID copied from the corresponding request event.
 
 **Example:**
 
@@ -631,11 +647,13 @@ result = FifoEventMyResult(code=ErrorCode.OK, message="Operation completed succe
 result = FifoEventMyResult(code=ErrorCode.ERROR, message="Database connection failed")
 ```
 
-Result event can be extended with custom fields.  
-Be sure to use the `@dataclass(kw_only=True)` and `@serializable` decorators when adding new serializable fields:
+Result events can be extended with custom fields.  
+Be sure to use the `@dataclass(kw_only=True)` and `@serializable` decorators when adding new serializable fields.
+Even if a constructor is not strictly required, it is recommended to provide one to avoid `pylint` warnings.
 
 ```python
 from dataclasses import dataclass, field
+from fifo_dev_common.event.fifo_event import ErrorCode, FifoEvent, FifoEventResultBase
 from fifo_dev_common.serialization.fifo_serialization import serializable
 
 @FifoEvent.register
@@ -644,7 +662,72 @@ from fifo_dev_common.serialization.fifo_serialization import serializable
 class FifoEventMyCustomResult(FifoEventResultBase):
     event_id = 101
     default_priority = 5
+
     details: str = field(default="", metadata={"format": "S"})
+
+    def __init__(self,
+                 details: str,
+                 code: ErrorCode,
+                 message: str | None = None,
+                 priority: int = -1):
+        super().__init__(code=code, message=message, priority=priority)
+        self.details = details
+
+result = FifoEventMyCustomResult(details="...", code=ErrorCode.OK)
+```
+
+The example below illustrates how to create a custom request with a correlation ID and copy this correlation ID into a custom answer.
+
+```python
+from dataclasses import dataclass, field
+from typing import ClassVar
+from uuid import UUID
+from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventResultWithCID, ErrorCode, FifoEventWithCID
+from fifo_dev_common.serialization.fifo_serialization import serializable
+
+@FifoEvent.register
+@serializable
+@dataclass(kw_only=True)
+class MyRequest(FifoEventWithCID):
+    event_id: ClassVar[int] = 42011
+    default_priority: ClassVar[int] = 10
+
+    data: int = field(metadata={"format": "I"})
+
+    def __init__(self,
+                 data: int,
+                 correlation_id: UUID | None = None,
+                 priority: int = -1):
+        super().__init__(correlation_id=correlation_id, priority=priority)
+        self.data = data
+
+req = MyRequest(data=123)
+# A new correlation ID is automatically generated and assigned to the request
+print(req.correlation_id)
+
+@FifoEvent.register
+@serializable
+@dataclass(kw_only=True)
+class MyResult(FifoEventResultWithCID):
+    event_id: ClassVar[int] = 42012
+    default_priority: ClassVar[int] = 10
+
+    result: int = field(metadata={"format": "I"})
+
+    def __init__(self,
+                 result: int,
+                 code: ErrorCode,
+                 correlation_id: UUID,
+                 message: str | None = None,
+                 priority: int = -1):
+        super().__init__(code=code,
+                         correlation_id=correlation_id,
+                         priority=priority,
+                         message=message)
+        self.result = result
+
+# Copy the request correlation ID into the result event
+res = MyResult(code=ErrorCode.OK, correlation_id=req.correlation_id, result=456)
 ```
 
 ---

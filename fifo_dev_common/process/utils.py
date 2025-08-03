@@ -1,15 +1,19 @@
 from __future__ import annotations
 from abc import ABC, abstractmethod
 import asyncio
+from dataclasses import dataclass
 import threading
 import queue
 from threading import Thread
 from multiprocessing import Process
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Type
+from uuid import UUID
 from fifo_dev_common.event.fifo_event import (
+    ErrorCode,
     FifoEventShutdown,
     FifoEvent,
     FifoEventException,
+    FifoEventResultWithCID
 )
 from fifo_dev_common.logging.logger import get_logger
 
@@ -668,6 +672,54 @@ def _runner_sync(in_queue: Queue[FifoEvent],
                  callback: FifoSyncProcessWorkerCallback):
     FifoSyncProcessWorker(in_queue, out_queue, callback).run_until_complete()
 
+
+@dataclass
+class _ReceivedCID:
+    """
+    Internal helper class for tracking the state of pending correlation IDs.
+
+    This class is used to keep track of which ACK and/or DONE events have been received
+    for a given correlation ID, as well as to store the future that will be completed
+    when all expected responses are received.
+
+    Attributes:
+        future (asyncio.Future[FifoEventResultWithCID]):
+            The future to be completed when the expected response(s) are received.
+
+        cls_ack (Type[FifoEventResultWithCID] | None):
+            The class of the expected ACK event, or None if not expected.
+
+        cls_done (Type[FifoEventResultWithCID] | None):
+            The class of the expected DONE event, or None if not expected.
+
+        ack_received (bool):
+            Whether the ACK event has been received.
+
+        done_received (bool):
+            Whether the DONE event has been received.
+    """
+
+    future: asyncio.Future[FifoEventResultWithCID]
+    cls_ack: Type[FifoEventResultWithCID] | None = None
+    cls_done: Type[FifoEventResultWithCID] | None = None
+    ack_received: bool = False
+    done_received: bool = False
+
+    def done(self) -> bool:
+        """
+        Return True if all expected responses (ACK and/or DONE) have been received.
+
+        Returns:
+            bool:
+                True if the ACK (if expected) and DONE (if expected) have both been received.
+        """
+        return (
+            (self.cls_ack is None or self.ack_received)
+            and
+            (self.cls_done is None or self.done_received)
+        )
+
+
 class FifoProcessManager:
     """
     Manager class for running a worker in a separate OS process and handling interprocess
@@ -683,7 +735,8 @@ class FifoProcessManager:
     Usage:
         - Instantiate with an event loop and a worker callback (async or sync).
         - Call `start()` to launch the worker process and communication threads.
-        - Use `send()` and `receive()` to asynchronously exchange events.
+        - Use `send()`, `send_and_wait_response()` and `receive()` to asynchronously
+          exchange events.
         - Call `stop()` to shut down the worker process.
         - Call `join()` to wait for all threads and the process to exit.
 
@@ -711,6 +764,16 @@ class FifoProcessManager:
 
         _async_out (asyncio.PriorityQueue[FifoEvent]):
             Async priority queue for outgoing events in the main process.
+
+        _lock_cid (asyncio.Lock):
+            Lock used to protect concurrent access to the `_received_cid` dictionary from multiple
+            coroutines. Ensures that updates to correlation ID tracking are safe when accessed from
+            both async code and threads via `run_coroutine_threadsafe`.
+
+        _received_cid (dict[UUID, _ReceivedCID]):
+            Dictionary mapping correlation IDs to their tracking state (`_ReceivedCID`).
+            Used to manage pending requests and match incoming ACK/DONE events to their
+            corresponding futures.
     """
 
     _in_queue: Queue[FifoEvent]
@@ -721,6 +784,8 @@ class FifoProcessManager:
     _puller_thread: Thread
     _async_in: asyncio.PriorityQueue[FifoEvent]
     _async_out: asyncio.PriorityQueue[FifoEvent]
+    _lock_cid: asyncio.Lock
+    _received_cid: dict[UUID, _ReceivedCID]
 
     def __init__(self,
                  loop: asyncio.AbstractEventLoop,
@@ -742,6 +807,9 @@ class FifoProcessManager:
                 Optional async priority queue for outgoing events in the main process.
         """
         self._loop = loop
+
+        self._lock_cid = asyncio.Lock()
+        self._received_cid = {}
 
         self._in_queue = Queue()
         self._out_queue = Queue()
@@ -818,6 +886,61 @@ class FifoProcessManager:
         await self._async_in.put(event)
         _trace("[FifoProcessManager.fct:send] Event dispatched")
 
+    async def send_and_wait_response(
+            self, event: FifoEvent,
+            cls_ack: Type[FifoEventResultWithCID] | None = None,
+            cls_done: Type[FifoEventResultWithCID] | None = None) -> FifoEventResultWithCID:
+        """
+        Asynchronously send an event to the worker process and wait for an ACK and/or DONE response.
+
+        This method sends the given event to the worker process and waits for a response event
+        matching the specified ACK and/or DONE result classes. The correlation ID of the event
+        is used to track and match the response. This is useful for request/response workflows
+        where confirmation or completion events are expected.
+
+        Args:
+            event (FifoEvent):
+                The event to send to the worker process.
+
+            cls_ack (Type[FifoEventResultWithCID] | None, optional):
+                The class of the expected ACK response event. If None, no ACK is expected.
+
+            cls_done (Type[FifoEventResultWithCID] | None, optional):
+                The class of the expected DONE response event. If None, no DONE is expected.
+
+        Returns:
+            FifoEventResultWithCID:
+                The received ACK or DONE response event, depending on which is requested and
+                received last.
+
+        Raises:
+            ValueError: If neither ACK nor DONE result classes are specified.
+            RuntimeError: If the event does not have a correlation ID, or if a duplicate 
+                          correlation ID is detected.
+        """
+        if cls_ack is None and cls_done is None:
+            raise ValueError("At least one of cls_ack or cls_done must be specified.")
+
+        await self.send(event)
+
+        correlation_id = getattr(event, "correlation_id", None)
+        if correlation_id is None:
+            raise RuntimeError("Missing correlation id")
+        async with self._lock_cid:
+            if correlation_id in self._received_cid:
+                raise RuntimeError("Duplicated correlation id")
+            future=self._loop.create_future()
+            self._received_cid[correlation_id] = _ReceivedCID(
+                future=future,
+                cls_ack=cls_ack,
+                cls_done=cls_done
+            )
+        _trace("[FifoProcessManager.fct:send] Waiting on result (ack/done)")
+        result = await future
+        _trace("[FifoProcessManager.fct:send] Result received (ack/done)")
+
+        return result
+
     async def receive(self) -> FifoEvent:
         """
         Asynchronously receive the next event from the worker process.
@@ -847,17 +970,82 @@ class FifoProcessManager:
                 _trace("[FifoProcessManager.thread:_in_queue_pusher] Shutdown event forwarded; stopping thread")  # pylint: disable=line-too-long
                 break
 
+    async def _update_received_correlation_id(self, event: FifoEventResultWithCID):
+        """
+        Update the state of a pending correlation ID entry when a result event is received.
+
+        This method is called by the `_out_queue_puller` thread when it receives a
+        `FifoEventResultWithCID` event from the worker process (via the interprocess output queue).
+        In this case, the event is handled directly and is **not** placed into the `self._async_out`
+        queue by the `_out_queue_puller` thread.
+
+        If the event's correlation ID does not match any pending request, the event is inserted
+        into the async output queue (`self._async_out`) to ensure it is not discarded. This allows
+        unexpected or unsolicited result events to still be processed by the main application.
+
+        The method updates the corresponding entry in `_received_cid` to track whether the expected
+        ACK and/or DONE events have been received for a given correlation ID. If all required
+        responses have been received, the associated future is completed and the entry is removed
+        from the tracking dictionary.
+
+        If an ACK event is received with an error code (i.e., `event.code is not ErrorCode.OK`),
+        the method will immediately complete the future and remove the entry, without waiting for
+        a DONE event. This ensures that tasks which failed to start or were not accepted do not
+        block waiting for a completion event that will never arrive.
+
+        Args:
+            event (FifoEventResultWithCID):
+                The result event received from the worker process, containing a correlation ID.
+        """
+        async with self._lock_cid:
+
+            received_cid = self._received_cid.get(event.correlation_id)
+
+            if received_cid is None:
+                # this event does not match to any request, we insert it to the output queue
+                # in order to not discard it
+                await self._async_out.put(event)
+                return
+
+            if event.__class__ == received_cid.cls_ack:
+                if event.code is not ErrorCode.OK:
+                    # there has been an error, then we do not wait for the DONE event as the task
+                    # was not received / started successfully.
+                    received_cid.future.set_result(event)
+                    del self._received_cid[event.correlation_id]
+                    return
+
+                received_cid.ack_received = True
+            if event.__class__ == received_cid.cls_done:
+                received_cid.done_received = True
+            if received_cid.done():
+                received_cid.future.set_result(event)
+                del self._received_cid[event.correlation_id]
+
     def _out_queue_puller(self) -> None:
         """
         Thread target: Moves events from the interprocess output queue to the async output queue.
 
-        Stops when a FifoEventShutdown is received, which is forwarded to the async output queue to
-        cascade the shutdown process.
+        For most events, this thread inserts them directly into the async output queue
+        (`self._async_out`). However, events of type `FifoEventResultWithCID` are **not** inserted
+        into the queue by this thread. Instead, they are forwarded to the 
+        `_update_received_correlation_id` coroutine for correlation ID tracking.
+        If a `FifoEventResultWithCID` does not match any pending request (i.e., its correlation ID
+        is not found), `_update_received_correlation_id` will insert it into the async output queue
+        to ensure it is not discarded.
+
+        Stops when a `FifoEventShutdown` is received, which is forwarded to the async output queue
+        to cascade the shutdown process.
         """
         _trace("[FifoProcessManager.thread:_out_queue_puller] Thread running")
         while True:
             event = self._out_queue.get()
-            asyncio.run_coroutine_threadsafe(self._async_out.put(event), self._loop)
+            if isinstance(event, FifoEventResultWithCID):
+                asyncio.run_coroutine_threadsafe(
+                    self._update_received_correlation_id(event), self._loop
+                )
+            else:
+                asyncio.run_coroutine_threadsafe(self._async_out.put(event), self._loop)
             _trace("[FifoProcessManager.thread:_out_queue_puller] Received event from worker process")  # pylint: disable=line-too-long
             if isinstance(event, FifoEventShutdown):
                 _trace("[FifoProcessManager.thread:_out_queue_puller] Shutdown event received; stopping thread")  # pylint: disable=line-too-long

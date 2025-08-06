@@ -8,7 +8,7 @@ from typing import ClassVar, cast
 from uuid import uuid4
 import pytest
 from fifo_dev_common.event.fifo_event import (
-    ErrorCode,
+    EErrorCode,
     FifoEvent,
     FifoEventException,
     FifoEventResultBase,
@@ -433,12 +433,12 @@ def test_event_results():
         event_id = 100
         default_priority = 10
 
-    event = FifoEventMyResult(ErrorCode.ERROR, "error")
+    event = FifoEventMyResult(EErrorCode.ERROR, "error")
 
     sock1, sock2 = socket.socketpair()
     event.serialize_to_socket(sock1)
     event2 = cast(FifoEventMyResult, FifoEvent.deserialize_from_socket(sock2))
-    assert event2.code is ErrorCode.ERROR
+    assert event2.code is EErrorCode.ERROR
     assert event2.message == "error"
 
 
@@ -487,7 +487,7 @@ def test_event_result_cid_existing():
         default_priority = 10
 
     cid = uuid4()
-    event1 = TestEventResultCID(code=ErrorCode.ERROR, message="error", correlation_id=cid)
+    event1 = TestEventResultCID(code=EErrorCode.ERROR, message="error", correlation_id=cid)
 
     assert event1.correlation_id == cid
 

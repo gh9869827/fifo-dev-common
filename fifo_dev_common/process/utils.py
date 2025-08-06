@@ -9,7 +9,7 @@ from multiprocessing import Process
 from typing import TYPE_CHECKING, Type
 from uuid import UUID
 from fifo_dev_common.event.fifo_event import (
-    ErrorCode,
+    EErrorCode,
     FifoEventShutdown,
     FifoEvent,
     FifoEventException,
@@ -1008,7 +1008,7 @@ class FifoProcessManager:
                 return
 
             if event.__class__ == received_cid.cls_ack:
-                if event.code is not ErrorCode.OK:
+                if event.code is not EErrorCode.OK:
                     # there has been an error, then we do not wait for the DONE event as the task
                     # was not received / started successfully.
                     received_cid.future.set_result(event)

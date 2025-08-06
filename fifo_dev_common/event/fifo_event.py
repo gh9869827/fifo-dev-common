@@ -373,7 +373,7 @@ class FifoEventException(FifoEvent):
             self.message = message
 
 
-class ErrorCode(IntEnum):
+class EErrorCode(IntEnum):
     """
     Enumeration of standard error codes for FifoEventResultBase and its subclasses.
 
@@ -413,18 +413,18 @@ class FifoEventResultSimpleBase(FifoEvent):
     an event_id and is intended only as a base class.
 
     Attributes:
-        code (ErrorCode):
+        code (EErrorCode):
             [Serializable] The result status of the operation.
     """
 
-    code: ErrorCode = field(metadata={"format": "E<B>", "ptype": ErrorCode})
+    code: EErrorCode = field(metadata={"format": "E<B>", "ptype": EErrorCode})
 
-    def __init__(self, code: ErrorCode, priority: int = -1):
+    def __init__(self, code: EErrorCode, priority: int = -1):
         """
         Initialize a FifoEventResultSimpleBase with result status.
 
         Args:
-            code (ErrorCode):
+            code (EErrorCode):
                 The result status of the operation.
 
             priority (int, optional):
@@ -459,20 +459,20 @@ class FifoEventResultBase(FifoEventResultSimpleBase):
             default_priority = 10
 
         # Success case
-        result = FifoEventMyResult(ErrorCode.OK, "Operation completed successfully")
+        result = FifoEventMyResult(EErrorCode.OK, "Operation completed successfully")
 
         # Error case
-        result = FifoEventMyResult(ErrorCode.ERROR, "Database connection failed")
+        result = FifoEventMyResult(EErrorCode.ERROR, "Database connection failed")
     """
 
     message: str | None = field(default=None, metadata={"format": "?S"})
 
-    def __init__(self, code: ErrorCode, message: str | None = None, priority: int = -1):
+    def __init__(self, code: EErrorCode, message: str | None = None, priority: int = -1):
         """
         Initialize a FifoEventResultBase with result status and optional message.
 
         Args:
-            code (ErrorCode):
+            code (EErrorCode):
                 The result status of the operation.
 
             message (str, optional):
@@ -544,7 +544,7 @@ class FifoEventResultWithCID(FifoEventResultBase):
     correlation_id: UUID = field(metadata=field_meta_serialize_handler_uuid())
 
     def __init__(self,
-                 code: ErrorCode,
+                 code: EErrorCode,
                  correlation_id: UUID,
                  message: str | None = None,
                  priority: int = -1):
@@ -557,7 +557,7 @@ class FifoEventResultWithCID(FifoEventResultBase):
         requests and responses.
 
         Args:
-            code (ErrorCode):
+            code (EErrorCode):
                 The result status of the operation.
 
             correlation_id (UUID):

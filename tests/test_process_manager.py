@@ -10,7 +10,7 @@ from fifo_dev_common.event.fifo_event import (
     FifoEventException,
     FifoEventWithCID,
     FifoEventResultWithCID,
-    ErrorCode,
+    EErrorCode,
 )
 from fifo_dev_common.process.utils import (
     FifoProcessManager,
@@ -221,7 +221,7 @@ class TestDone(FifoEventResultWithCID):
 async def test_update_received_correlation_id_unmatched():
     loop = asyncio.get_event_loop()
     manager = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback())
-    event = TestAck(code=ErrorCode.OK, correlation_id=uuid4())
+    event = TestAck(code=EErrorCode.OK, correlation_id=uuid4())
 
     await manager._update_received_correlation_id(event)
     queued = await manager._async_out.get()
@@ -239,11 +239,11 @@ async def test_send_and_wait_response_ack_done():
     )
     await asyncio.sleep(0)
     await manager._update_received_correlation_id(
-        TestAck(code=ErrorCode.OK, correlation_id=request.correlation_id)
+        TestAck(code=EErrorCode.OK, correlation_id=request.correlation_id)
     )
     assert not task.done()
     await manager._update_received_correlation_id(
-        TestDone(code=ErrorCode.OK, correlation_id=request.correlation_id)
+        TestDone(code=EErrorCode.OK, correlation_id=request.correlation_id)
     )
     result = await task
     assert isinstance(result, TestDone)
@@ -260,7 +260,7 @@ async def test_send_and_wait_response_ack_error():
         manager.send_and_wait_response(request, TestAck, TestDone)
     )
     await asyncio.sleep(0)
-    err_ack = TestAck(code=ErrorCode.ERROR, correlation_id=request.correlation_id)
+    err_ack = TestAck(code=EErrorCode.ERROR, correlation_id=request.correlation_id)
     await manager._update_received_correlation_id(err_ack)
     result = await task
     assert result is err_ack
@@ -282,10 +282,10 @@ class Worker(FifoSyncProcessWorkerCallback):
     ):
         if isinstance(incoming_event, TestRequest):
             outgoing_queue.put(
-                TestAck(code=ErrorCode.OK, correlation_id=incoming_event.correlation_id)
+                TestAck(code=EErrorCode.OK, correlation_id=incoming_event.correlation_id)
             )
             outgoing_queue.put(
-                TestDone(code=ErrorCode.OK, correlation_id=incoming_event.correlation_id)
+                TestDone(code=EErrorCode.OK, correlation_id=incoming_event.correlation_id)
             )
         else:
             outgoing_queue.put(incoming_event)

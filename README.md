@@ -605,7 +605,7 @@ The `fifo_dev_common` library also includes other classes that inherit from `Fif
 - **Description:** Base class for reporting operation outcomes with error codes and optional messages.
 - **Use Case:** Subclass this to define application-specific result events.
 - **Fields:**
-  - `code`: An `ErrorCode` value (e.g., `OK`, `ERROR`).
+  - `code`: An `EErrorCode` value (e.g., `OK`, `ERROR`).
   - `message`: *(Optional)* Descriptive message providing additional context.
 
 You can subclass `FifoEventResultBase` to create strongly-typed result events tailored to the application's needs.  
@@ -631,7 +631,7 @@ Each subclass must define a unique `event_id` and `default_priority`, and may in
 
 ```python
 from fifo_dev_common.event.fifo_event import (
-    FifoEventResultBase, ErrorCode, FifoEvent
+    FifoEventResultBase, EErrorCode, FifoEvent
 )
 
 @FifoEvent.register
@@ -641,10 +641,10 @@ class FifoEventMyResult(FifoEventResultBase):
 
 # Usage
 # Success
-result = FifoEventMyResult(code=ErrorCode.OK, message="Operation completed successfully")
+result = FifoEventMyResult(code=EErrorCode.OK, message="Operation completed successfully")
 
 # Error
-result = FifoEventMyResult(code=ErrorCode.ERROR, message="Database connection failed")
+result = FifoEventMyResult(code=EErrorCode.ERROR, message="Database connection failed")
 ```
 
 Result events can be extended with custom fields.  
@@ -653,7 +653,7 @@ Even if a constructor is not strictly required, it is recommended to provide one
 
 ```python
 from dataclasses import dataclass, field
-from fifo_dev_common.event.fifo_event import ErrorCode, FifoEvent, FifoEventResultBase
+from fifo_dev_common.event.fifo_event import EErrorCode, FifoEvent, FifoEventResultBase
 from fifo_dev_common.serialization.fifo_serialization import serializable
 
 @FifoEvent.register
@@ -667,13 +667,13 @@ class FifoEventMyCustomResult(FifoEventResultBase):
 
     def __init__(self,
                  details: str,
-                 code: ErrorCode,
+                 code: EErrorCode,
                  message: str | None = None,
                  priority: int = -1):
         super().__init__(code=code, message=message, priority=priority)
         self.details = details
 
-result = FifoEventMyCustomResult(details="...", code=ErrorCode.OK)
+result = FifoEventMyCustomResult(details="...", code=EErrorCode.OK)
 ```
 
 The example below illustrates how to create a custom request with a correlation ID and copy this correlation ID into a custom answer.
@@ -682,7 +682,7 @@ The example below illustrates how to create a custom request with a correlation 
 from dataclasses import dataclass, field
 from typing import ClassVar
 from uuid import UUID
-from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventResultWithCID, ErrorCode, FifoEventWithCID
+from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventResultWithCID, EErrorCode, FifoEventWithCID
 from fifo_dev_common.serialization.fifo_serialization import serializable
 
 @FifoEvent.register
@@ -716,7 +716,7 @@ class MyResult(FifoEventResultWithCID):
 
     def __init__(self,
                  result: int,
-                 code: ErrorCode,
+                 code: EErrorCode,
                  correlation_id: UUID,
                  message: str | None = None,
                  priority: int = -1):
@@ -727,7 +727,7 @@ class MyResult(FifoEventResultWithCID):
         self.result = result
 
 # Copy the request correlation ID into the result event
-res = MyResult(code=ErrorCode.OK, correlation_id=req.correlation_id, result=456)
+res = MyResult(code=EErrorCode.OK, correlation_id=req.correlation_id, result=456)
 ```
 
 ---

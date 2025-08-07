@@ -199,7 +199,7 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
         field.metadata.get("serialize")
     )
     deserialize_fn = cast(
-        Callable[[bytearray, int], tuple[Any, int]],
+        Callable[[bytes, int], tuple[Any, int]],
         field.metadata.get("deserialize")
     )
     bytelength_fn = cast(
@@ -411,12 +411,12 @@ class FieldSpecCompiled(ABC):
         """
 
     @abc.abstractmethod
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize the field's value from the `buffer` starting at index `idx`.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -472,14 +472,14 @@ class FieldSpecCompiledCustom(FieldSpecCompiled):
             Function to compute the serialized byte size of the field value.
     """
     _serialize_fn: Callable[[Any, bytearray, int], int]
-    _deserialize_fn: Callable[[bytearray, int], tuple[Any, int]]
+    _deserialize_fn: Callable[[bytes, int], tuple[Any, int]]
     _bytelength_fn: Callable[[Any], int]
 
     def __init__(
         self,
         name: str,
         serialize_fn: Callable[[Any, bytearray, int], int],
-        deserialize_fn: Callable[[bytearray, int], tuple[Any, int]],
+        deserialize_fn: Callable[[bytes, int], tuple[Any, int]],
         bytelength_fn: Callable[[Any], int],
     ) -> None:
         """
@@ -493,7 +493,7 @@ class FieldSpecCompiledCustom(FieldSpecCompiled):
                 Function to serialize the field value. Must accept (obj, buffer, idx)
                 and return the updated buffer index.
 
-            deserialize_fn (Callable[[bytearray, int], tuple[Any, int]]):
+            deserialize_fn (Callable[[bytes, int], tuple[Any, int]]):
                 Function to deserialize the field value. Must accept (buffer, idx)
                 and return (value, updated_idx).
 
@@ -532,14 +532,14 @@ class FieldSpecCompiledCustom(FieldSpecCompiled):
         value = getattr(class_obj, self.name)
         return self._serialize_fn(value, buffer, idx)
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> tuple[Any, int]:
         """
         Deserialize the custom field from the buffer using the custom function.
 
         Delegates deserialization to the `_deserialize_fn` callable provided during initialization.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -645,12 +645,12 @@ class FieldSpecCompiledBasic(FieldSpecCompiled):
         struct.pack_into('<' + self.struct_format, buffer, idx, value)
         return idx + self._struct_format_byte_length
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize the field's value from the `buffer` starting at index `idx`.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -719,7 +719,7 @@ class FieldSpecCompiledEnum(FieldSpecCompiledBasic):
         super().__init__(name, struct_format)
         self.ptype = ptype
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize the Enum field's value from the buffer starting at index `idx`.
 
@@ -727,7 +727,7 @@ class FieldSpecCompiledEnum(FieldSpecCompiledBasic):
         converts it to an Enum instance using the provided `ptype`.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -790,13 +790,13 @@ class FieldSpecCompiledOptional(FieldSpecCompiledBasic):
         struct.pack_into('<b' + self.struct_format, buffer, idx, 1, obj)
         return idx + 1 + self._struct_format_byte_length
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize the optional field's value from the buffer starting at index `idx`,
         first reading the presence flag.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -880,7 +880,7 @@ class FieldSpecCompiledArray(FieldSpecCompiledBasic):
         struct.pack_into('<' + self.struct_format * length, buffer, idx, *obj)
         return idx + self._struct_format_byte_length * length
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize the array field from the buffer starting at `idx`.
 
@@ -888,7 +888,7 @@ class FieldSpecCompiledArray(FieldSpecCompiledBasic):
         using the struct format, returning them as a list.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -978,12 +978,12 @@ class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
         """
 
     @abc.abstractmethod
-    def _deserialize_element(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+    def _deserialize_element(self, buffer: bytes, idx: int) -> tuple[Any, int]:
         """
         Deserialize a single element from `buffer` starting at `idx`.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -1048,7 +1048,7 @@ class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
                 idx = self._serialize_element(elem, buffer, idx)
         return idx
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> tuple[Any, int]:
         """
         Deserialize an array of optional values from `buffer`, starting at index `idx`.
 
@@ -1056,7 +1056,7 @@ class _FieldSpecCompiledOptionalArrayBase(FieldSpecCompiled):
         a list containing either element values or `None` for missing items.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -1155,12 +1155,12 @@ class FieldSpecCompiledOptionalPrimitiveArray(_FieldSpecCompiledOptionalArrayBas
         struct.pack_into('<' + self.struct_format, buffer, idx, elem)
         return idx + self._struct_format_byte_length
 
-    def _deserialize_element(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+    def _deserialize_element(self, buffer: bytes, idx: int) -> tuple[Any, int]:
         """
         Deserialize a primitive element from `buffer` at `idx`.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -1257,12 +1257,12 @@ class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
         buffer[idx:idx + len(data)] = data
         return idx + len(data)
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize a NumPy array field from the buffer at `idx`.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -1344,7 +1344,7 @@ class FieldSpecCompiledString(FieldSpecCompiled):
         buffer[idx:idx + len(data)] = data
         return idx + len(data)
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize the UTF-8 string field from the buffer at `idx`.
 
@@ -1352,7 +1352,7 @@ class FieldSpecCompiledString(FieldSpecCompiled):
         then reads and decodes that many bytes as UTF-8.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -1454,7 +1454,7 @@ class FieldSpecCompiledFixedString(FieldSpecCompiled):
         buffer[idx:idx + self.length] = data
         return idx + self.length
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize the fixed-length UTF-8 string field from the buffer at `idx`.
 
@@ -1462,7 +1462,7 @@ class FieldSpecCompiledFixedString(FieldSpecCompiled):
         and decodes the result as a UTF-8 string.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -1542,7 +1542,7 @@ class FieldSpecCompiledOptionalString(FieldSpecCompiled):
         buffer[idx:idx + len(data)] = data
         return idx + len(data)
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize the optional UTF-8 string field from the buffer at `idx`.
 
@@ -1550,7 +1550,7 @@ class FieldSpecCompiledOptionalString(FieldSpecCompiled):
         (4 bytes) and decodes the following bytes as UTF-8.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -1662,7 +1662,7 @@ class FieldSpecCompiledOptionalFixedString(FieldSpecCompiled):
         buffer[idx:idx + self.length] = data
         return idx + self.length
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize the optional fixed-length UTF-8 string field from the buffer at `idx`.
 
@@ -1670,7 +1670,7 @@ class FieldSpecCompiledOptionalFixedString(FieldSpecCompiled):
         bytes, strips trailing ASCII spaces, and decodes as UTF-8.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -1784,7 +1784,7 @@ class FieldSpecCompiledTuple(FieldSpecCompiled):
         struct.pack_into('<' + self.struct_format, buffer, idx, *values)
         return idx + self._struct_format_byte_length
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize the tuple field from the buffer starting at `idx`.
 
@@ -1792,7 +1792,7 @@ class FieldSpecCompiledTuple(FieldSpecCompiled):
         returning them as a tuple.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -1886,14 +1886,14 @@ class FieldSpecCompiledGeneric(FieldSpecCompiled):
         """
         return getattr(class_obj, self.name).serialize_to_bytes(buffer, idx)
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> Tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
         """
         Deserialize the nested serializable field from the buffer starting at `idx`.
 
         Delegates deserialization to the nested type's `deserialize_from_bytes` class method.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -1986,7 +1986,7 @@ class FieldSpecCompiledGenericArray(FieldSpecCompiled):
             idx = elem.serialize_to_bytes(buffer, idx)
         return idx
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> tuple[Any, int]:
         """
         Deserialize the array field from the buffer starting at `idx`.
 
@@ -1994,7 +1994,7 @@ class FieldSpecCompiledGenericArray(FieldSpecCompiled):
         from the buffer using the element's deserialization method.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -2097,7 +2097,7 @@ class FieldSpecCompiledGenericOptional(FieldSpecCompiled):
         idx = obj.serialize_to_bytes(buffer, idx)
         return idx
 
-    def deserialize_from_bytes(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> tuple[Any, int]:
         """
         Deserialize the optional nested object field from the buffer starting at `idx`.
 
@@ -2105,7 +2105,7 @@ class FieldSpecCompiledGenericOptional(FieldSpecCompiled):
         deserializes the nested object using the nested type's method.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -2202,12 +2202,12 @@ class FieldSpecCompiledGenericOptionalArray(_FieldSpecCompiledOptionalArrayBase)
         """
         return elem.serialize_to_bytes(buffer, idx)
 
-    def _deserialize_element(self, buffer: bytearray, idx: int) -> tuple[Any, int]:
+    def _deserialize_element(self, buffer: bytes, idx: int) -> tuple[Any, int]:
         """
         Deserialize a nested element from `buffer` at `idx`.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing serialized data.
 
             idx (int):
@@ -2268,12 +2268,12 @@ class FifoSerializable:
         raise RuntimeError("not implemented yet") # pragma: no cover
 
     @classmethod
-    def deserialize_from_bytes(cls, buffer: bytearray, idx: int) -> Tuple[Self, int]:
+    def deserialize_from_bytes(cls, buffer: bytes, idx: int) -> Tuple[Self, int]:
         """
         Deserialize an instance from the given buffer starting at index `idx`.
 
         Args:
-            buffer (bytearray):
+            buffer (bytes):
                 The buffer containing the serialized data.
 
             idx (int):
@@ -2357,7 +2357,7 @@ def serializable(cls: C) -> C:
     serialization logic, then injects three methods into the class:
 
         - serialize_to_bytes(self, buffer: bytearray, idx: int) -> int
-        - deserialize_from_bytes(cls, buffer: bytearray, idx: int) -> Tuple[cls, int]
+        - deserialize_from_bytes(cls, buffer: bytes, idx: int) -> Tuple[cls, int]
         - serialized_byte_size(self) -> int
 
     The injected methods handle binary serialization and deserialization
@@ -2392,7 +2392,7 @@ def serializable(cls: C) -> C:
             idx = field.serialize_to_bytes(self, buffer, idx)
         return idx
 
-    def deserialize_from_bytes(cls: Type[C], buffer: bytearray, idx: int) -> Tuple[C, int]:
+    def deserialize_from_bytes(cls: Type[C], buffer: bytes, idx: int) -> Tuple[C, int]:
         args = {}
         for field in compiled_fields:
             obj, idx = field.deserialize_from_bytes(buffer, idx)

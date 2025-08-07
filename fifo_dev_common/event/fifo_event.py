@@ -172,12 +172,12 @@ class FifoEvent(FifoSerializable):
         sock.sendall(buffer)
 
     @classmethod
-    def from_bytes(cls, data: bytearray) -> FifoEvent:
+    def from_bytes(cls, data: bytes) -> FifoEvent:
         """
         Deserialize a binary buffer to an event instance.
 
         Args:
-            data (bytearray):
+            data (bytes):
                 The binary buffer starting with 4-byte event_id.
 
         Returns:

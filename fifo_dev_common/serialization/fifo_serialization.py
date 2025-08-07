@@ -145,6 +145,11 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
           - '[np:x]' where x is one of 'u8', 'u16', 'u32', 'i8', 'i16', 'i32',
             'f32', 'f64'. The dtype must be fixed for the field.
             Supports arrays of arbitrary dimension.
+          - '[np:x:shape]' where 'shape' is a comma-separated list of
+            integers specifying the fixed array shape (e.g.,
+            '[np:i32:64]' for a vector of length 64, '[np:f32:2,3]' for a
+            2×3 array). The array's shape is omitted from the serialized
+            data, reducing overhead when the shape is known.
 
       - Optional values (nullable) of basic types:
           - '?x' where x is a single struct format character.
@@ -228,7 +233,24 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
             if struct_format.startswith("[np:"):
                 if not struct_format.endswith("]"):
                     raise ValueError("Invalid format: numpy array format string must end with ']'")
-                dtype_key = struct_format[4:-1]
+                inner = struct_format[4:-1]
+                if ":" in inner:
+                    dtype_key, shape_str = inner.split(":", 1)
+                    dtype = _NUMPY_DTYPES.get(dtype_key)
+                    if dtype is None:
+                        raise ValueError("Unsupported numpy dtype")
+                    try:
+                        shape = tuple(int(x) for x in shape_str.split(",") if x)
+                    except ValueError as exc:  # noqa: F841
+                        raise ValueError(
+                            "Invalid format: numpy array shape must be comma-separated integers"
+                        )
+                    if not shape:
+                        raise ValueError(
+                            "Invalid format: numpy array shape must contain at least one dimension"
+                        )
+                    return FieldSpecCompiledFixedNumpyArray(name, dtype, shape)
+                dtype_key = inner
                 dtype = _NUMPY_DTYPES.get(dtype_key)
                 if dtype is None:
                     raise ValueError("Unsupported numpy dtype")
@@ -1189,6 +1211,127 @@ class FieldSpecCompiledOptionalPrimitiveArray(_FieldSpecCompiledOptionalArrayBas
                 The number of bytes used to serialize one element.
         """
         return self._struct_format_byte_length
+
+
+class FieldSpecCompiledFixedNumpyArray(FieldSpecCompiled):
+    """
+    FieldSpecCompiled subclass for fixed-size NumPy arrays of a fixed dtype.
+
+    Serializes the array as a raw contiguous bytes buffer in row-major (C)
+    order. The array's dtype and shape are fixed and verified against the
+    provided value. The serialized form omits the ndim and shape information,
+    reducing overhead when the shape is known at compile time.
+
+    Attributes:
+        dtype (np.dtype[Any]):
+            The required NumPy dtype of the array (e.g., np.uint8, np.float32).
+        shape (tuple[int, ...]):
+            The fixed shape of the array.
+        _byte_len (int):
+            The total number of bytes occupied by the serialized array.
+    """
+
+    dtype: np.dtype[Any]
+    shape: tuple[int, ...]
+    _byte_len: int
+
+    def __init__(self, name: str, dtype: np.dtype[Any], shape: tuple[int, ...]):
+        """
+        Initialize the field for a fixed-size NumPy array.
+
+        Args:
+            name (str):
+                The name of the field.
+
+            dtype (np.dtype[Any]):
+                The NumPy dtype of the array.
+
+            shape (tuple[int, ...]):
+                The fixed shape of the array.
+        """
+        super().__init__(name)
+        self.dtype = np.dtype(dtype)
+        self.shape = tuple(int(s) for s in shape)
+        count = 1
+        for dim in self.shape:
+            count *= dim
+        self._byte_len = count * self.dtype.itemsize
+
+    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize the NumPy array field from `class_obj` into `buffer` at `idx`.
+
+        Args:
+            class_obj (Any):
+                The instance containing the array field.
+
+            buffer (bytearray):
+                The buffer into which to serialize data.
+
+            idx (int):
+                The starting index in the buffer at which to write data.
+
+        Returns:
+            int:
+                The updated buffer index after writing.
+
+        Raises:
+            ValueError: If the array's dtype or shape does not match the
+                required dtype and shape.
+        """
+        arr: NDArray[Any] = getattr(class_obj, self.name)
+        if arr.dtype != self.dtype:
+            raise ValueError("NDArray dtype mismatch")
+        if arr.shape != self.shape:
+            raise ValueError("NDArray shape mismatch")
+        data = arr.tobytes(order="C")
+        buffer[idx:idx + self._byte_len] = data
+        return idx + self._byte_len
+
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
+        """
+        Deserialize a fixed-size NumPy array field from `buffer` at `idx`.
+
+        Args:
+            buffer (bytes):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in the buffer at which to read data.
+
+        Returns:
+            Tuple[NDArray, int]:
+                - The deserialized NumPy array.
+                - The updated buffer index after reading.
+        """
+        count = self._byte_len // self.dtype.itemsize
+        arr = np.frombuffer(buffer, dtype=self.dtype, count=count, offset=idx).reshape(self.shape)
+        arr = arr.copy()  # Defensive copy (frombuffer is always read-only)
+        idx += self._byte_len
+        return arr, idx
+
+    def serialized_byte_size(self, class_obj: Any) -> int:
+        """
+        Compute the total number of bytes required to serialize the field.
+
+        Args:
+            class_obj (Any):
+                The instance containing the array field.
+
+        Returns:
+            int:
+                The total byte size for serialization.
+
+        Raises:
+            ValueError: If the array's dtype or shape does not match the fixed
+                dtype and shape.
+        """
+        arr: NDArray[Any] = getattr(class_obj, self.name)
+        if arr.dtype != self.dtype:
+            raise ValueError("NDArray dtype mismatch")
+        if arr.shape != self.shape:
+            raise ValueError("NDArray shape mismatch")
+        return self._byte_len
 
 
 class FieldSpecCompiledNumpyArray(FieldSpecCompiled):

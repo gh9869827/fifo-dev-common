@@ -384,6 +384,8 @@ def test_super_combo():
 
     ("[np:bad]", None, "Unsupported numpy dtype"),
     ("[np:u8", None, "Invalid format: numpy array format string must end with ']'"),
+    ("[np:u8:1,a]", None, "Invalid format: numpy array shape must be comma-separated integers"),
+    ("[np:u8:]", None, "Invalid format: numpy array shape must contain at least one dimension"),
 
     (None,  None, "Either a type or struct format must be provided"),
 ])
@@ -442,6 +444,24 @@ class TestNumpy3D(FifoSerializable):
     arr: NDArray[np.int16] = field(metadata={"format": "[np:i16]"})
 
 
+@serializable
+@dataclass
+class TestNumpyFixed1D(FifoSerializable):
+    arr: NDArray[np.int32] = field(metadata={"format": "[np:i32:64]"})
+
+
+@serializable
+@dataclass
+class TestNumpyFixed2D(FifoSerializable):
+    arr: NDArray[np.float32] = field(metadata={"format": "[np:f32:2,3]"})
+
+
+@serializable
+@dataclass
+class TestNumpyFixedMatrix(FifoSerializable):
+    arr: NDArray[np.int8] = field(metadata={"format": "[np:i8:3,3]"})
+
+
 def test_numpy_arrays_roundtrip() -> None:
     a1 = np.arange(10, dtype=np.uint8)
     a2 = np.arange(6, dtype=np.float32).reshape(2, 3)
@@ -464,6 +484,30 @@ def test_numpy_arrays_roundtrip() -> None:
         restored_arr = cast(NDArray[Any], restored.arr) # type: ignore
         assert np.array_equal(restored_arr, arr)
         assert restored_arr.dtype == arr.dtype
+
+
+def test_numpy_fixed_arrays_roundtrip() -> None:
+    v1 = np.arange(64, dtype=np.int32)
+    v2 = np.arange(6, dtype=np.float32).reshape(2, 3)
+    v3 = np.arange(9, dtype=np.int8).reshape(3, 3)
+
+    o1 = TestNumpyFixed1D(v1)
+    o2 = TestNumpyFixed2D(v2)
+    o3 = TestNumpyFixedMatrix(v3)
+
+    lst: list[tuple[FifoSerializable, NDArray[Any], Type[FifoSerializable]]] = [
+        (o1, v1, TestNumpyFixed1D),
+        (o2, v2, TestNumpyFixed2D),
+        (o3, v3, TestNumpyFixedMatrix),
+    ]
+
+    for obj, arr, cls in lst:
+        buf = bytearray(obj.serialized_byte_size())
+        obj.serialize_to_bytes(buf, 0)
+        restored, _ = cls.deserialize_from_bytes(buf, 0)
+        restored_arr = cast(NDArray[Any], restored.arr)  # type: ignore
+        assert np.array_equal(restored_arr, arr)
+        assert restored_arr.shape == arr.shape
 
 
 @serializable

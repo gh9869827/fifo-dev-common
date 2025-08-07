@@ -5,11 +5,17 @@ from typing import Protocol, runtime_checkable
 class SupportsRecvInto(Protocol):
     def recv_into(self, buffer: memoryview, nbytes: int = ...) -> int: ...
 
+@runtime_checkable
+class SupportsRead(Protocol):
+    def read(self, size: int = ...) -> bytes: ...
 
 @runtime_checkable
 class SupportsSendAll(Protocol):
     def sendall(self, data: bytes | bytearray | memoryview, flags: int = ..., /) -> None: ...
 
+@runtime_checkable
+class SupportsWrite(Protocol):
+    def write(self, b: bytes | bytearray | memoryview, /) -> int | None: ...
 
 def recv_all(sock: SupportsRecvInto, n: int) -> bytearray:
     """

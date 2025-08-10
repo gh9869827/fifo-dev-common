@@ -199,15 +199,17 @@ class FifoEvent(FifoSerializable):
 
         This method computes the serialized byte size, allocates a single buffer,
         writes the total message length and event ID, serializes the payload, and
-        sends the entire buffer using `sock.sendall()`.
+        sends the entire buffer using `serial.write()`. If `write` succeeds, the
+        serial connection is then flushed using `serial.flush()`.
 
         Args:
             serial (SupportsWrite):
-                A serial-like object that supports `write()` for writing bytes.
+                A serial-like object that supports `write()` for writing bytes and `flush()`.
         """
         buffer = self._get_serialized_buffer()
         if serial.write(buffer) != len(buffer):
             raise RuntimeError("Invalid number of bytes written to serial connection")
+        serial.flush()
 
     @classmethod
     def from_bytes(cls, data: bytes) -> FifoEvent:

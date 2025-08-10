@@ -16,6 +16,7 @@ class SupportsSendAll(Protocol):
 @runtime_checkable
 class SupportsWrite(Protocol):
     def write(self, b: bytes | bytearray | memoryview, /) -> int | None: ...
+    def flush(self) -> None: ...
 
 def recv_all(sock: SupportsRecvInto, n: int) -> bytearray:
     """

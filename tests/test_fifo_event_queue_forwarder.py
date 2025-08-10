@@ -5,11 +5,22 @@ import multiprocessing
 import pytest
 from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventShutdown
 from fifo_dev_common.event.fifo_event_queue_forwarder import FifoEventQueueForwarderMpToAsync
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    from multiprocessing.queues import Queue as MpQueue
+else:
+    MpQueue = multiprocessing.Queue  # type: ignore[misc]
+
+
+# pylint: disable=protected-access
+# pyright: reportPrivateUsage=false
 
 
 @pytest.mark.asyncio
 async def test_forwarder_forwards_events_and_stops():
-    mp_queue: multiprocessing.Queue[FifoEvent] = multiprocessing.Queue()
+    mp_queue: MpQueue[FifoEvent] = MpQueue()
     async_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
     loop = asyncio.get_running_loop()
     forwarder = FifoEventQueueForwarderMpToAsync(mp_queue, async_queue, loop)
@@ -31,7 +42,7 @@ async def test_forwarder_forwards_events_and_stops():
 
 @pytest.mark.asyncio
 async def test_forwarder_forward_shutdown_event_when_configured():
-    mp_queue: multiprocessing.Queue[FifoEvent] = multiprocessing.Queue()
+    mp_queue: MpQueue[FifoEvent] = MpQueue()
     async_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
     loop = asyncio.get_running_loop()
     forwarder = FifoEventQueueForwarderMpToAsync(
@@ -50,7 +61,7 @@ async def test_forwarder_forward_shutdown_event_when_configured():
 
 
 def test_forwarder_start_requires_running_loop():
-    mp_queue: multiprocessing.Queue[FifoEvent] = multiprocessing.Queue()
+    mp_queue: MpQueue[FifoEvent] = MpQueue()
     async_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
     loop = asyncio.new_event_loop()
     forwarder = FifoEventQueueForwarderMpToAsync(mp_queue, async_queue, loop)
@@ -62,8 +73,8 @@ def test_forwarder_start_requires_running_loop():
         loop.close()
 
 
-def test_enqueue_async_drops_event_when_loop_closed(caplog):
-    mp_queue: multiprocessing.Queue[FifoEvent] = multiprocessing.Queue()
+def test_enqueue_async_drops_event_when_loop_closed(caplog: pytest.LogCaptureFixture):
+    mp_queue: MpQueue[FifoEvent] = MpQueue()
     async_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
     loop = asyncio.new_event_loop()
     forwarder = FifoEventQueueForwarderMpToAsync(mp_queue, async_queue, loop)
@@ -82,8 +93,8 @@ def test_enqueue_async_drops_event_when_loop_closed(caplog):
 
 
 @pytest.mark.asyncio
-async def test_start_warns_when_thread_alive(caplog):
-    mp_queue: multiprocessing.Queue[FifoEvent] = multiprocessing.Queue()
+async def test_start_warns_when_thread_alive(caplog: pytest.LogCaptureFixture):
+    mp_queue: MpQueue[FifoEvent] = MpQueue()
     async_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
     loop = asyncio.get_running_loop()
     forwarder = FifoEventQueueForwarderMpToAsync(mp_queue, async_queue, loop)
@@ -102,8 +113,8 @@ async def test_start_warns_when_thread_alive(caplog):
     forwarder.join()
 
 
-def test_join_warns_when_not_started(caplog):
-    mp_queue: multiprocessing.Queue[FifoEvent] = multiprocessing.Queue()
+def test_join_warns_when_not_started(caplog: pytest.LogCaptureFixture):
+    mp_queue: MpQueue[FifoEvent] = MpQueue()
     async_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
     loop = asyncio.new_event_loop()
     forwarder = FifoEventQueueForwarderMpToAsync(mp_queue, async_queue, loop)
@@ -120,7 +131,7 @@ def test_join_warns_when_not_started(caplog):
     loop.close()
 
 
-def test_run_logs_error_when_queue_closed(caplog):
+def test_run_logs_error_when_queue_closed(caplog: pytest.LogCaptureFixture):
     class DummyQueue:
         def get(self) -> FifoEvent:
             raise EOFError()
@@ -128,7 +139,7 @@ def test_run_logs_error_when_queue_closed(caplog):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     async_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
-    forwarder = FifoEventQueueForwarderMpToAsync(DummyQueue(), async_queue, loop)
+    forwarder = FifoEventQueueForwarderMpToAsync(DummyQueue(), async_queue, loop) # type: ignore
     try:
         with caplog.at_level(
             logging.ERROR, logger="fifo_dev_common.event.fifo_event_queue_forwarder"
@@ -145,7 +156,7 @@ def test_run_logs_error_when_queue_closed(caplog):
         loop.close()
 
 
-def test_run_logs_warning_on_queue_closed_after_stop_requested(caplog):
+def test_run_logs_warning_on_queue_closed_after_stop_requested(caplog: pytest.LogCaptureFixture):
     class DummyQueue:
         def get(self) -> FifoEvent:
             raise OSError()
@@ -153,7 +164,7 @@ def test_run_logs_warning_on_queue_closed_after_stop_requested(caplog):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     async_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
-    forwarder = FifoEventQueueForwarderMpToAsync(DummyQueue(), async_queue, loop)
+    forwarder = FifoEventQueueForwarderMpToAsync(DummyQueue(), async_queue, loop) # type: ignore
     forwarder._stop_requested.set()
     try:
         with caplog.at_level(
@@ -171,7 +182,7 @@ def test_run_logs_warning_on_queue_closed_after_stop_requested(caplog):
         loop.close()
 
 
-def test_run_logs_unexpected_exception(caplog):
+def test_run_logs_unexpected_exception(caplog: pytest.LogCaptureFixture):
     class DummyQueue:
         def get(self) -> FifoEvent:
             raise ValueError()
@@ -179,7 +190,7 @@ def test_run_logs_unexpected_exception(caplog):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     async_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
-    forwarder = FifoEventQueueForwarderMpToAsync(DummyQueue(), async_queue, loop)
+    forwarder = FifoEventQueueForwarderMpToAsync(DummyQueue(), async_queue, loop) # type: ignore
     try:
         with caplog.at_level(
             logging.ERROR, logger="fifo_dev_common.event.fifo_event_queue_forwarder"

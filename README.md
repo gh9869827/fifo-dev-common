@@ -24,6 +24,7 @@ It provides the following for runtime type checks and casting, docstring parsing
 - `@serializable` decorator and `FifoSerializable` base class: Efficient binary serialization and deserialization for dataclasses, supporting primitives, enums, optional fields, arrays, and nested objects.
 - `recv_all(sock, n)`: Efficiently receive exactly `n` bytes from a socket-like object supporting `recv_into()`.
 - `class FifoEvent`: Base class for binary-serializable events, with factory deserialization and class registration for cross-system use.
+- `class FifoEventQueueForwarderMpToAsync`: Bridges multiprocessing and asyncio event queues via a background thread.
 - `get_logger()`: Returns a logger instance with `.trace()` support for fine-grained debugging. Registers a custom TRACE level and logger class.
 
 ## 📚 Table of Contents
@@ -38,6 +39,7 @@ It provides the following for runtime type checks and casting, docstring parsing
   - [socket_utils](#fifo_dev_commonsocketsocket_utils)
   - [fifo_serialization](#fifo_dev_commonserializationfifo_serialization)
   - [fifo_event](#fifo_dev_commoneventfifo_event)
+  - [fifo_event_queue_forwarder](#fifo_dev_commoneventfifo_event_queue_forwarder)
   - [logger](#fifo_dev_commonlogginglogger)
 - [🧪 Tests](#-tests)
 - [📄 License](#-license)
@@ -729,6 +731,77 @@ class MyResult(FifoEventResultWithCID):
 
 # Copy the request correlation ID into the result event
 res = MyResult(code=EErrorCode.OK, correlation_id=req.correlation_id, result=456)
+```
+
+---
+
+### `fifo_dev_common.event.fifo_event_queue_forwarder`
+
+Bridges a blocking `multiprocessing.Queue` of `FifoEvent` instances to an `asyncio.PriorityQueue` using a background thread.
+
+- Forwards events from `multiprocessing.Queue` → `asyncio.PriorityQueue`.
+- Can stop cleanly via `.stop()` **or** by pushing a `FifoEventShutdown` event into the source queue.
+- Optionally forwards the shutdown event to the asyncio queue.
+
+**Example:**
+
+```python
+from __future__ import annotations
+import asyncio
+import multiprocessing
+from typing import TYPE_CHECKING
+
+from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventShutdown
+from fifo_dev_common.event.fifo_event_queue_forwarder import FifoEventQueueForwarderMpToAsync
+
+# Proper type hints for the mp queue
+if TYPE_CHECKING:
+    from multiprocessing.queues import Queue as MpQueue
+else:
+    MpQueue = multiprocessing.Queue  # type: ignore[misc]
+
+
+# Minimal concrete event for the demo
+class DummyEvent(FifoEvent):
+    event_id = 42
+    default_priority = 0
+
+
+async def main() -> None:
+    # Create queues
+    mp_q: MpQueue[FifoEvent] = MpQueue()
+    async_q: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+
+    # Bridge mp_q -> async_q with a background thread
+    forwarder = FifoEventQueueForwarderMpToAsync(
+        mp_q, async_q, asyncio.get_running_loop(), forward_shutdown_event=True
+    )
+
+    # Start the background thread
+    forwarder.start()
+
+    # Send an event into the multiprocessing queue
+    mp_q.put(DummyEvent())
+
+    # Receive it from the asyncio priority queue
+    evt = await async_q.get()
+    print("Got:", type(evt).__name__, "priority:", evt.priority)
+
+    # Request shutdown (also forwards FifoEventShutdown into async_q)
+    forwarder.stop()
+    # Alternatively, instead of calling `stop()` you can directly push a FifoEventShutdown event:
+    # mp_q.put(FifoEventShutdown())
+
+    # Optionally consume the forwarded shutdown sentinel
+    shutdown = await async_q.get()
+    print("Got shutdown:", type(shutdown).__name__)
+    assert isinstance(shutdown, FifoEventShutdown)
+
+    # Wait for the background thread to stop
+    forwarder.join()
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 ---

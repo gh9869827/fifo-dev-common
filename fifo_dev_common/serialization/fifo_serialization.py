@@ -148,7 +148,7 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
           - '[np:x:shape]' where 'shape' is a comma-separated list of
             integers specifying the fixed array shape (e.g.,
             '[np:i32:64]' for a vector of length 64, '[np:f32:2,3]' for a
-            2×3 array). The array's shape is omitted from the serialized
+            2x3 array). The array's shape is omitted from the serialized
             data, reducing overhead when the shape is known.
 
       - Optional values (nullable) of basic types:
@@ -244,7 +244,7 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                     except ValueError as exc:  # noqa: F841
                         raise ValueError(
                             "Invalid format: numpy array shape must be comma-separated integers"
-                        )
+                        ) from exc
                     if not shape:
                         raise ValueError(
                             "Invalid format: numpy array shape must contain at least one dimension"

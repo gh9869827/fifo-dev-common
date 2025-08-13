@@ -176,21 +176,23 @@ class FifoEvent(FifoSerializable):
     def serialize_to_socket(self, sock: SupportsSendAll):
         """
         Serialize the event and send it over the given socket with a 4-byte length prefix.
-        Automatically flushes the socket.
+
+        The socket is expected to be a raw, unbuffered socket. Therefore, this function does not
+        automatically call `flush()`. If you wrap the socket in a buffered stream (e.g.,
+        using `makefile()`), you must manually flush the stream after calling this function.
 
         The serialized format is:
             [length (4 bytes)] + [event_id (4 bytes)] + [payload]
 
         This method computes the serialized byte size, allocates a single buffer,
         writes the total message length and event ID, serializes the payload, and
-        sends the entire buffer using `sock.sendall()` followed by `sock.flush()`.
+        sends the entire buffer using `sock.sendall()`.
 
         Args:
             sock (SupportsSendAll):
-                A socket-like object that supports `sendall()` for writing bytes and `flush()`.
+                A socket-like object that supports `sendall()` for writing bytes.
         """
         sock.sendall(self._get_serialized_buffer())
-        sock.flush()
 
     def serialize_to_serial(self, serial: SupportsWrite):
         """

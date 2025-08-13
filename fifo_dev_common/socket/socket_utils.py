@@ -12,7 +12,6 @@ class SupportsRead(Protocol):
 @runtime_checkable
 class SupportsSendAll(Protocol):
     def sendall(self, data: bytes | bytearray | memoryview, flags: int = ..., /) -> None: ...
-    def flush(self) -> None: ...
 
 @runtime_checkable
 class SupportsWrite(Protocol):

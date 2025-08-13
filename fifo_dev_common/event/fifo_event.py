@@ -1,8 +1,9 @@
 from __future__ import annotations
+import asyncio
 from dataclasses import dataclass, field
 from enum import IntEnum
 import struct
-from typing import Any, Callable, Type, TypeVar, ClassVar
+from typing import Any, Awaitable, Callable, Type, TypeVar, ClassVar
 import threading
 from uuid import UUID, uuid4
 from fifo_dev_common.serialization.fifo_serialization import field_meta_serialize_handler_uuid
@@ -213,6 +214,25 @@ class FifoEvent(FifoSerializable):
             raise RuntimeError("Invalid number of bytes written to serial connection")
         serial.flush()
 
+    async def serialize_to_socket_async(self, sock: asyncio.StreamWriter):
+        """
+        Serialize the event and send it over the given asyncio stream writer with a 4-byte length
+        prefix. Automatically flushes the stream.
+
+        The serialized format is:
+            [length (4 bytes)] + [event_id (4 bytes)] + [payload]
+
+        This method computes the serialized byte size, allocates a single buffer,
+        writes the total message length and event ID, serializes the payload, and
+        sends the entire buffer using `writer.write()` followed by `await writer.drain()`.
+
+        Args:
+            sock (asyncio.StreamWriter):
+                An asyncio stream writer that supports `write()` for writing bytes and `drain()`.
+        """
+        sock.write(self._get_serialized_buffer())
+        await sock.drain()
+
     @classmethod
     def from_bytes(cls, data: bytes) -> FifoEvent:
         """
@@ -335,6 +355,75 @@ class FifoEvent(FifoSerializable):
                 If the event ID is unknown or the buffer is too short to decode.
         """
         return cls._deserialize_from_stream(serial.read)
+
+    @classmethod
+    async def _deserialize_from_stream_async(
+        cls,
+        read_nb_bytes: Callable[[int], Awaitable[bytes]]
+    ) -> FifoEvent:
+        """
+        Receive and deserialize a FifoEvent from a stream using the async `read_nb_bytes`
+        function.
+
+        This method reads a 4-byte length prefix to determine the size of the
+        incoming message, then reads the specified number of bytes from the stream.
+        It then delegates deserialization to `from_bytes()`, which performs
+        event ID dispatch and constructs the appropriate subclass instance.
+
+        Args:
+            read_nb_bytes (Callable[[int], Awaitable[bytes]]):
+                An async function that reads exactly `nb_bytes` from a stream, like an
+                asyncio StreamReader.
+
+        Returns:
+            FifoEvent:
+                The deserialized event instance.
+
+        Raises:
+            ConnectionError:
+                If the stream is closed or incomplete data is received.
+
+            ValueError:
+                If the event ID is unknown or the buffer is too short to decode.
+        """
+        length_bytes = await read_nb_bytes(4)
+
+        if len(length_bytes) != 4:
+            raise ConnectionError(
+                f"Incomplete message header: expected 4 bytes, got {len(length_bytes)}"
+            )
+
+        length, = struct.unpack("<I", length_bytes)
+        payload = await read_nb_bytes(length)
+
+        return cls.from_bytes(payload)
+
+    @classmethod
+    async def deserialize_from_socket_async(cls, sock: asyncio.StreamReader) -> FifoEvent:
+        """
+        Receive and deserialize a FifoEvent from the given asyncio stream reader.
+
+        This method reads a 4-byte length prefix to determine the size of the
+        incoming message, then reads the specified number of bytes from the stream.
+        It then delegates deserialization to `from_bytes()`, which performs
+        event ID dispatch and constructs the appropriate subclass instance.
+
+        Args:
+            sock (asyncio.StreamReader):
+                An asyncio StreamReader that supports `readexactly()` for reading exact byte counts.
+
+        Returns:
+            FifoEvent:
+                The deserialized event instance.
+
+        Raises:
+            ConnectionError:
+                If the stream is closed or incomplete data is received.
+
+            ValueError:
+                If the event ID is unknown or the buffer is too short to decode.
+        """
+        return await cls._deserialize_from_stream_async(sock.readexactly)
 
     @classmethod
     def clear_registry(cls):

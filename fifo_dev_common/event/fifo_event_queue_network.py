@@ -292,7 +292,79 @@ def _log_tls_peer(writer: asyncio.StreamWriter, role: str) -> None:
                 role, cn or "?", fp or "?", not_after or "?", issuer or "?")
 
 
-class FifoEventQueueNetworkAsyncClient:
+# -----------------------------------
+# Base mixin for common functionality
+# -----------------------------------
+
+
+class _FifoEventQueueNetworkAsyncMixin:
+    """
+    Mixin class providing common functionality for both client and server network classes.
+    
+    This mixin contains shared methods for sending events, receiving events, and stopping
+    the network connection. It assumes the inheriting class has _reader, _writer, _out_queue,
+    and _task attributes.
+    """
+    _reader: asyncio.StreamReader
+    _writer: asyncio.StreamWriter
+    _out_queue: asyncio.PriorityQueue[FifoEvent]
+    _task: asyncio.Task[None]
+
+    async def stop(self):
+        """
+        Signal the connection to stop by sending a shutdown event.
+
+        This method sends a FifoEventShutdown event which will cause the background
+        network-to-queue task to terminate after processing the shutdown signal.
+        Call join() after this method to wait for the actual shutdown to complete.
+
+        Raises:
+            ConnectionError: If the connection is already closed or there's a network error.
+        """
+        await self.send(FifoEventShutdown())
+
+    async def _network_to_queue(self):
+        """
+        Background task that continuously receives events from the network and queues them.
+
+        This method runs in a background asyncio task and continuously deserializes events
+        from the network stream, placing them into the output queue. It terminates when
+        a FifoEventShutdown event is received.
+
+        Raises:
+            ConnectionError: If the network connection is lost during operation.
+            ValueError: If an invalid event is received and cannot be deserialized.
+        """
+        while True:
+            try:
+                event = await FifoEvent.deserialize_from_socket_async(self._reader)
+            except (RuntimeError, TypeError, ValueError) as e:
+                role = "client" if "Client" in type(self).__name__ else "server"
+                logger.error("[%s] Error receiving event: %r", role, type(e))
+                continue
+
+            await self._out_queue.put(event)
+            if isinstance(event, FifoEventShutdown):
+                break
+
+    async def send(self, event: FifoEvent):
+        """
+        Send a FifoEvent over the network connection.
+
+        This method immediately serializes and sends the provided event over the
+        network connection. The event is automatically flushed to ensure delivery.
+
+        Args:
+            event (FifoEvent):
+                The event to send over the network connection.
+
+        Raises:
+            ConnectionError: If the connection is closed or there's a network error.
+        """
+        await event.serialize_to_socket_async(self._writer)  # drain handled by serializer
+
+
+class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin):
     """
     Asyncio-based network client for sending and receiving FifoEvent objects over TCP.
 
@@ -444,19 +516,6 @@ class FifoEventQueueNetworkAsyncClient:
 
         return cls(reader, writer, out_queue)
 
-    async def stop(self):
-        """
-        Signal the client to stop by sending a shutdown event.
-
-        This method sends a FifoEventShutdown event which will cause the background
-        network-to-queue task to terminate after processing the shutdown signal.
-        Call join() after this method to wait for the actual shutdown to complete.
-
-        Raises:
-            ConnectionError: If the connection is already closed or there's a network error.
-        """
-        await self.send(FifoEventShutdown())
-
     async def join(self, timeout: float = 5.0):
         """
         Wait for the client to finish shutting down and clean up resources.
@@ -484,42 +543,8 @@ class FifoEventQueueNetworkAsyncClient:
         # Close writer with a bounded wait
         await _bounded_close_and_wait_closed_writer(self._writer, timeout=3.0, label="client")
 
-    async def _network_to_queue(self):
-        """
-        Background task that continuously receives events from the network and queues them.
 
-        This method runs in a background asyncio task and continuously deserializes events
-        from the network stream, placing them into the output queue. It terminates when
-        a FifoEventShutdown event is received.
-
-        Raises:
-            ConnectionError: If the network connection is lost during operation.
-            ValueError: If an invalid event is received and cannot be deserialized.
-        """
-        while True:
-            event = await FifoEvent.deserialize_from_socket_async(self._reader)
-            await self._out_queue.put(event)
-            if isinstance(event, FifoEventShutdown):
-                break
-
-    async def send(self, event: FifoEvent):
-        """
-        Send a FifoEvent over the network connection.
-
-        This method immediately serializes and sends the provided event over the
-        network connection. The event is automatically flushed to ensure delivery.
-
-        Args:
-            event (FifoEvent):
-                The event to send over the network connection.
-
-        Raises:
-            ConnectionError: If the connection is closed or there's a network error.
-        """
-        await event.serialize_to_socket_async(self._writer)  # drain handled by serializer
-
-
-class FifoEventQueueNetworkAsyncServer:
+class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin):
     """
     Asyncio-based network server for sending and receiving FifoEvent objects over TCP.
 
@@ -666,19 +691,6 @@ class FifoEventQueueNetworkAsyncServer:
         server.close()
         return cls(reader, writer, server, out_queue)
 
-    async def stop(self):
-        """
-        Signal the server to stop by sending a shutdown event.
-
-        This method sends a FifoEventShutdown event which will cause the background
-        network-to-queue task to terminate after processing the shutdown signal.
-        Call join() after this method to wait for the actual shutdown to complete.
-
-        Raises:
-            ConnectionError: If the connection is already closed or there's a network error.
-        """
-        await self.send(FifoEventShutdown())
-
     async def join(self, timeout: float = 5.0):
         """
         Wait for the server to finish shutting down and clean up resources.
@@ -708,37 +720,3 @@ class FifoEventQueueNetworkAsyncServer:
 
         # Listener was closed in accept(); now wait for it to finish closing
         await _bounded_wait_closed_server(self._server, timeout=3.0)
-
-    async def _network_to_queue(self):
-        """
-        Background task that continuously receives events from the network and queues them.
-
-        This method runs in a background asyncio task and continuously deserializes events
-        from the network stream, placing them into the output queue. It terminates when
-        a FifoEventShutdown event is received.
-
-        Raises:
-            ConnectionError: If the network connection is lost during operation.
-            ValueError: If an invalid event is received and cannot be deserialized.
-        """
-        while True:
-            event = await FifoEvent.deserialize_from_socket_async(self._reader)
-            await self._out_queue.put(event)
-            if isinstance(event, FifoEventShutdown):
-                break
-
-    async def send(self, event: FifoEvent):
-        """
-        Send a FifoEvent over the network connection.
-
-        This method immediately serializes and sends the provided event over the
-        network connection. The event is automatically flushed to ensure delivery.
-
-        Args:
-            event (FifoEvent):
-                The event to send over the network connection.
-
-        Raises:
-            ConnectionError: If the connection is closed or there's a network error.
-        """
-        await event.serialize_to_socket_async(self._writer)  # drain handled by serializer

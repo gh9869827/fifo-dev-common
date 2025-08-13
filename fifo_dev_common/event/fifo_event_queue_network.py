@@ -536,6 +536,8 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin):
         try:
             await asyncio.wait_for(self._task, timeout=timeout)
         except asyncio.TimeoutError:
+            logger.warning("[client] join() timed out after %.1fs; cancelling background task.",
+                           timeout)
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
@@ -711,6 +713,8 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin):
         try:
             await asyncio.wait_for(self._task, timeout=timeout)
         except asyncio.TimeoutError:
+            logger.warning("[server] join() timed out after %.1fs; cancelling background task.",
+                           timeout)
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task

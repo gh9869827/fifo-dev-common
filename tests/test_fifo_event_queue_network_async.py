@@ -17,6 +17,17 @@ from fifo_dev_common.serialization.fifo_serialization import serializable
 # pylint: disable=protected-access
 # pyright: reportPrivateUsage=false
 
+@pytest.fixture(autouse=True)
+def ensure_fifo_event_shutdown_registered():
+    if FifoEventShutdown.event_id not in FifoEvent._registry:
+        FifoEvent.register(FifoEventShutdown)
+
+@pytest.fixture(autouse=True)
+def ensure_fifo_event_dummy_registered():
+    if DummyEvent.event_id not in FifoEvent._registry:
+        FifoEvent.register(DummyEvent)
+
+
 @FifoEvent.register
 @serializable
 @dataclass(kw_only=True)
@@ -41,11 +52,13 @@ async def test_client_server_roundtrip(use_tls: bool, unused_tcp_port: int):
         ca = trustme.CA()
         cert = ca.issue_cert("localhost")
         server_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-        cert.configure_cert(server_ctx)
+        # Pylance: Type of "configure_cert" is partially unknown
+        cert.configure_cert(server_ctx) # type: ignore[reportUnknownMemberType]
         server_ctx.minimum_version = ssl.TLSVersion.TLSv1_3
 
         client_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-        ca.configure_trust(client_ctx)
+        # Pylance: Type of "configure_trust" is partially unknown
+        ca.configure_trust(client_ctx) # type: ignore[reportUnknownMemberType]
         client_ctx.minimum_version = ssl.TLSVersion.TLSv1_3
 
     server_task = asyncio.create_task(

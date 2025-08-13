@@ -25,6 +25,7 @@ It provides the following for runtime type checks and casting, docstring parsing
 - `recv_all(sock, n)`: Efficiently receive exactly `n` bytes from a socket-like object supporting `recv_into()`.
 - `class FifoEvent`: Base class for binary-serializable events, with factory deserialization and class registration for cross-system use.
 - `class FifoEventQueueForwarderMpToAsync`: Bridges multiprocessing and asyncio event queues via a background thread.
+- `class FifoEventQueueNetworkAsyncClient` / `class FifoEventQueueNetworkAsyncServer`: Asyncio-based network communication for FifoEvent objects over TCP with optional TLS 1.3 encryption.
 - `get_logger()`: Returns a logger instance with `.trace()` support for fine-grained debugging. Registers a custom TRACE level and logger class.
 
 ## 📚 Table of Contents
@@ -40,6 +41,7 @@ It provides the following for runtime type checks and casting, docstring parsing
   - [fifo_serialization](#fifo_dev_commonserializationfifo_serialization)
   - [fifo_event](#fifo_dev_commoneventfifo_event)
   - [fifo_event_queue_forwarder](#fifo_dev_commoneventfifo_event_queue_forwarder)
+  - [fifo_event_queue_network](#fifo_dev_commoneventfifo_event_queue_network)
   - [logger](#fifo_dev_commonlogginglogger)
 - [🧪 Tests](#-tests)
 - [📄 License](#-license)
@@ -799,6 +801,109 @@ async def main() -> None:
 
     # Wait for the background thread to stop
     forwarder.join()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+### `fifo_dev_common.event.fifo_event_queue_network`
+
+Asyncio-based TCP transport for `FifoEvent` objects, with optional TLS 1.3 encryption.
+
+- `FifoEventQueueNetworkAsyncClient`: sends events immediately; receives events in a background task and enqueues them in a local `asyncio.PriorityQueue`.
+- `FifoEventQueueNetworkAsyncServer`: accepts **exactly one** client at a time (additional clients are rejected until the connection closes); sends events immediately and receives events in a background task, enqueuing them in a local `asyncio.PriorityQueue`.
+- `make_server_tls_context()` / `make_client_tls_context()`: helpers to build **TLS 1.3–only** SSL contexts.
+- Optional mutual TLS (mTLS): peer authentication.
+- Scope: transport layer only (no application-layer authentication/authorization).
+
+> **Security Note**
+> - Certificate revocation (OCSP/CRL) is out of scope and **not** implemented.
+> - Not audited or penetration-tested; not for safety-critical use.
+> - Intended for personal use on an internal network with **non-sensitive data** (e.g., hobby robotics / experimentation).
+> - TLS 1.3 and optional mTLS are supported, but there is **no application-layer authentication**.
+> - Do **not** expose this service to the public internet or untrusted networks.
+
+**Example:**
+
+```python
+import asyncio
+from fifo_dev_common.event.fifo_event_queue_network import (
+    FifoEventQueueNetworkAsyncServer, 
+    FifoEventQueueNetworkAsyncClient,
+    make_server_tls_context,
+    make_client_tls_context
+)
+from fifo_dev_common.event.fifo_event import FifoEvent
+
+# Define a custom event
+@FifoEvent.register
+class MyEvent(FifoEvent):
+    event_id = 42
+    default_priority = 5
+
+async def run_server():
+    # Create TLS context for server (mutual TLS)
+    server_ctx = make_server_tls_context(
+        certfile="path/to/server.crt",
+        keyfile="path/to/server.key",
+        cafile="path/to/ca.crt",
+        require_client_cert=True  # Enable mTLS
+    )
+
+    # Create a priority queue for events received by the server
+    queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+
+    # Start server (accepts one client, then stops listening)
+    server = await FifoEventQueueNetworkAsyncServer.accept(
+        "127.0.0.1", 8800, ssl_ctx=server_ctx, out_queue=queue
+    )
+    
+    # Send an event
+    await server.send(MyEvent())
+    
+    # Receive events from client
+    event = await queue.get()
+    print(f"Server received: {type(event).__name__}")
+    
+    # Graceful shutdown
+    await server.stop()
+    await server.join()
+
+async def run_client():
+    # wait for the server to start
+    await asyncio.sleep(1)
+
+    # Create TLS context for client (mutual TLS)
+    client_ctx = make_client_tls_context(
+        certfile="path/to/client.crt",
+        keyfile="path/to/client.key", 
+        cafile="path/to/ca.crt",
+        check_hostname=True
+    )
+    
+    # Connect to server
+    client = await FifoEventQueueNetworkAsyncClient.connect(
+        "127.0.0.1", 8800, 
+        ssl_ctx=client_ctx,
+        server_hostname="localhost"
+    )
+    
+    # Receive events from server
+    event = await client._out_queue.get()
+    print(f"Client received: {type(event).__name__}")
+    
+    # Send response
+    await client.send(MyEvent())
+    
+    # Graceful shutdown  
+    await client.stop()
+    await client.join()
+
+# Run server and client (in practice, these would be separate processes)
+async def main():
+    await asyncio.gather(run_server(), run_client())
 
 if __name__ == "__main__":
     asyncio.run(main())

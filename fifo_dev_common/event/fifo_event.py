@@ -567,7 +567,8 @@ class FifoEventException(FifoEvent):
 @serializable
 @dataclass(kw_only=True)
 class FifoEventKeepAlive(FifoEvent):
-    """Keep-alive event carrying the current epoch timestamp.
+    """
+    Keep-alive event carrying the current epoch timestamp.
 
     This standard event can be periodically sent to indicate that a connection
     or component is still alive. It contains the epoch time at which it was
@@ -576,10 +577,9 @@ class FifoEventKeepAlive(FifoEvent):
     Attributes:
         epoch (float):
             [Serializable] Epoch timestamp of when the event was created.
-            If ``None`` is passed to the constructor, the current time from
-            :func:`time.time` is used.
+            If `None` is passed to the constructor, the current time from
+            `time.time` is used.
     """
-
     event_id = 2
     default_priority = 0
 
@@ -590,11 +590,10 @@ class FifoEventKeepAlive(FifoEvent):
 
         Args:
             epoch (float | None, optional):
-                Explicit epoch timestamp. If ``None`` (default), the current
-                value from :func:`time.time` is used.
+                Explicit epoch timestamp. If `None` (default), the current from `time.time` is used.
+
             priority (int, optional):
-                Event priority. If ``-1`` (default), the class's
-                ``default_priority`` is used.
+                Event priority. If set to -1 (default), the class's default_priority is used.
         """
         super().__init__(priority=priority)
         if epoch is None:

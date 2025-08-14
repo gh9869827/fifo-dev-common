@@ -484,9 +484,11 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin):
             raise ValueError("TLS is required but no SSL context provided")
 
         if ssl_ctx is not None:
-            logger.warning("Establishing TLS 1.3 encrypted connection to %s:%s", host, port)
+            logger.warning("[client] Establishing TLS 1.3 encrypted connection to %s:%s",
+                           host, port)
         else:
-            logger.warning("Establishing NOT encrypted, NOT authenticated connection to %s:%s",
+            logger.warning("[client] Establishing NOT encrypted, "
+                           "NOT authenticated connection to %s:%s",
                            host, port)
 
         async def _do_open():
@@ -661,9 +663,10 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin):
             raise ValueError("TLS is required but no SSL context provided")
 
         if ssl_ctx is not None:
-            logger.warning("Accepting TLS 1.3 encrypted connection on %s:%s", host, port)
+            logger.warning("[server] Accepting TLS 1.3 encrypted connection on %s:%s", host, port)
         else:
-            logger.warning("Accepting NOT encrypted, NOT authenticated connection on %s:%s",
+            logger.warning("[server] Accepting NOT encrypted, "
+                           "NOT authenticated connection on %s:%s",
                            host, port)
 
         loop = asyncio.get_running_loop()
@@ -673,10 +676,12 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin):
         async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
             if not conn_future.done():
                 if ssl_ctx is not None:
-                    logger.warning("Opening TLS 1.3 encrypted connection on %s:%s", host, port)
+                    logger.warning("[server] Opening TLS 1.3 encrypted connection on %s:%s",
+                                   host, port)
                     _log_tls_peer(writer, "server")
                 else:
-                    logger.warning("Opening NOT encrypted, NOT authenticated connection on %s:%s",
+                    logger.warning("[server] Opening NOT encrypted, "
+                                   "NOT authenticated connection on %s:%s",
                                    host, port)
                 conn_future.set_result((reader, writer))
             else:

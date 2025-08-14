@@ -4,6 +4,7 @@ from enum import IntEnum
 import socket
 import struct
 import threading
+import time
 from typing import ClassVar, cast
 from uuid import uuid4
 import pytest
@@ -11,6 +12,7 @@ from fifo_dev_common.event.fifo_event import (
     EErrorCode,
     FifoEvent,
     FifoEventException,
+    FifoEventKeepAlive,
     FifoEventResultBase,
     FifoEventResultWithCID,
     FifoEventWithCID
@@ -359,9 +361,11 @@ def test_clear_registry_allows_re_registration():
 
 
 @pytest.fixture(autouse=True)
-def ensure_fifo_event_exception_registered():
+def ensure_standard_events_registered():
     if FifoEventException.event_id not in FifoEvent._registry:
         FifoEvent.register(FifoEventException)
+    if FifoEventKeepAlive.event_id not in FifoEvent._registry:
+        FifoEvent.register(FifoEventKeepAlive)
 
 
 def test_fifo_event_exception_1():
@@ -399,6 +403,23 @@ def test_fifo_event_exception_3():
         assert event3.class_name == "RuntimeError"
         assert event3.message == "Test message"
         assert event3.source == "Test #3"
+
+
+def test_fifo_event_keepalive_default_epoch():
+    start = time.time()
+    event = FifoEventKeepAlive()
+    end = time.time()
+    assert start <= event.epoch <= end
+    assert event.event_id == 2
+
+
+def test_fifo_event_keepalive_custom_epoch_roundtrip():
+    event = FifoEventKeepAlive(epoch=123.456, priority=5)
+    data = event.to_bytes()
+    event2 = FifoEvent.from_bytes(data)
+    assert isinstance(event2, FifoEventKeepAlive)
+    assert event2.epoch == pytest.approx(123.456)
+    assert event2.priority == 5
 
 
 def test_valueerror_when_both_exception_and_class_name_or_message():

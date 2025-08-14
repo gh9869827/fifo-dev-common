@@ -604,6 +604,12 @@ In addition to the `FifoEvent` base class, which can be subclassed to create cus
   - `message`: Exception message.
   - `source`: *(Optional)* Identifier of the source (such as thread or worker name).
 
+#### `FifoEventKeepAlive`
+- **Description:** Lightweight keep-alive message containing the epoch timestamp at creation.
+- **Use Case:** Send periodically to indicate that a connection or component is still active.
+- **Fields:**
+  - `epoch`: Timestamp in seconds from `time.time()` when the event was created. Automatically set if not provided.
+
 The `fifo_dev_common` library also includes other classes that inherit from `FifoEvent`, but are intended to be used as a base class for creating standardized events:
 
 #### `FifoEventResultBase`

@@ -3,6 +3,7 @@ import asyncio
 from dataclasses import dataclass, field
 from enum import IntEnum
 import struct
+import time
 from typing import Any, Awaitable, Callable, Type, TypeVar, ClassVar
 import threading
 from uuid import UUID, uuid4
@@ -560,6 +561,45 @@ class FifoEventException(FifoEvent):
                                  "is not set")
             self.class_name = class_name
             self.message = message
+
+
+@FifoEvent.register
+@serializable
+@dataclass(kw_only=True)
+class FifoEventKeepAlive(FifoEvent):
+    """Keep-alive event carrying the current epoch timestamp.
+
+    This standard event can be periodically sent to indicate that a connection
+    or component is still alive. It contains the epoch time at which it was
+    created.
+
+    Attributes:
+        epoch (float):
+            [Serializable] Epoch timestamp of when the event was created.
+            If ``None`` is passed to the constructor, the current time from
+            :func:`time.time` is used.
+    """
+
+    event_id = 2
+    default_priority = 0
+
+    epoch: float = field(metadata={"format": "d"})
+
+    def __init__(self, epoch: float | None = None, priority: int = -1):
+        """Initialize a :class:`FifoEventKeepAlive`.
+
+        Args:
+            epoch (float | None, optional):
+                Explicit epoch timestamp. If ``None`` (default), the current
+                value from :func:`time.time` is used.
+            priority (int, optional):
+                Event priority. If ``-1`` (default), the class's
+                ``default_priority`` is used.
+        """
+        super().__init__(priority=priority)
+        if epoch is None:
+            epoch = time.time()
+        self.epoch = epoch
 
 
 class EErrorCode(IntEnum):

@@ -586,7 +586,8 @@ class FifoEventKeepAlive(FifoEvent):
     epoch: float = field(metadata={"format": "d"})
 
     def __init__(self, epoch: float | None = None, priority: int = -1):
-        """Initialize a :class:`FifoEventKeepAlive`.
+        """
+        Initialize a `FifoEventKeepAlive` with the epoch timestamp at creation time.
 
         Args:
             epoch (float | None, optional):

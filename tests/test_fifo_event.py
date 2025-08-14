@@ -418,7 +418,8 @@ def test_fifo_event_keepalive_custom_epoch_roundtrip():
     data = event.to_bytes()
     event2 = FifoEvent.from_bytes(data)
     assert isinstance(event2, FifoEventKeepAlive)
-    assert event2.epoch == pytest.approx(123.456)
+    # Pylance: Type of "approx" is partially unknown
+    assert event2.epoch == pytest.approx(123.456) # type: ignore[reportUnknownMemberType]
     assert event2.priority == 5
 
 

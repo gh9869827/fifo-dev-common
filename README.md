@@ -26,7 +26,7 @@ It provides the following for runtime type checks and casting, docstring parsing
 - `class FifoEvent`: Base class for binary-serializable events, with factory deserialization and class registration for cross-system use.
 - `class FifoEventQueueForwarderMpToAsync`: Bridges multiprocessing and asyncio event queues via a background thread.
 - `class FifoEventQueueNetworkAsyncClient` / `class FifoEventQueueNetworkAsyncServer`: Asyncio-based network communication for FifoEvent objects over TCP with optional TLS 1.3 encryption.
-- `class FifoProcessManager`: Runs a worker in a separate process and bridges multiprocessing queues with asyncio. Requires an async priority queue for outgoing events.
+- `class FifoProcessManager`: Manager for running workers in separate OS processes with interprocess communication. Abstracts process creation, startup, and shutdown while bridging multiprocessing queues with asyncio. Supports both async and sync worker callbacks, with correlation ID tracking for request/response workflows.
 - `get_logger()`: Returns a logger instance with `.trace()` support for fine-grained debugging. Registers a custom TRACE level and logger class.
 
 ## 📚 Table of Contents
@@ -921,14 +921,22 @@ if __name__ == "__main__":
 
 ### `fifo_dev_common.process.utils.FifoProcessManager`
 
-Run a worker in a separate process and bridge multiprocessing queues with asyncio.
+Manager class for running workers in separate OS processes and handling interprocess communication.
+
+This class abstracts the creation, startup, and shutdown of worker processes (either async or sync), and manages the threads that transfer events between the main process and worker processes. It provides async methods for sending events and ensures clean shutdown by propagating shutdown events and joining all threads and processes.
+
+Key features:
+- Supports both `FifoAsyncProcessWorkerCallback` and `FifoSyncProcessWorkerCallback`
+- Automatic correlation ID tracking for request/response patterns via `send_and_wait_response()`
+- Thread-safe event bridging between multiprocessing queues and asyncio priority queues
+- Clean shutdown handling with proper thread and process joining
 
 **Example:**
 
 ```python
 import asyncio
 from fifo_dev_common.process.utils import FifoProcessManager, FifoAsyncProcessWorkerCallback
-from fifo_dev_common.event.fifo_event import FifoEvent
+from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventKeepAlive
 
 class Echo(FifoAsyncProcessWorkerCallback):
     def initialize(self, outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
@@ -937,19 +945,26 @@ class Echo(FifoAsyncProcessWorkerCallback):
     def finalize(self, outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
         pass
 
-    async def loop(self, incoming_event, incoming_queue_size, outgoing_queue):
+    async def loop(self,
+                   incoming_event: FifoEvent | None,
+                   incoming_queue_size: int,
+                   outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
         if incoming_event is not None:
             await outgoing_queue.put(incoming_event)
 
+    def get_timeout(self) -> float:
+        return -1
+
 async def main():
     loop = asyncio.get_running_loop()
-    out_q: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
-    mgr = FifoProcessManager(loop, Echo(), out_q)
-    mgr.start()
-    await mgr.send(FifoEvent())
-    event = await out_q.get()
-    await mgr.stop()
-    mgr.join()
+    out_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+    process_manager = FifoProcessManager(loop, Echo(), out_queue)
+    process_manager.start()
+    await process_manager.send(FifoEventKeepAlive())
+    event = await out_queue.get()
+    print(event)
+    await process_manager.stop()
+    process_manager.join()
 
 if __name__ == "__main__":
     asyncio.run(main())

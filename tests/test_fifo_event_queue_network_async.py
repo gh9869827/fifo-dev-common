@@ -76,15 +76,25 @@ async def test_client_server_roundtrip(use_tls: bool, unused_tcp_port: int):
     )
     server = await server_task
 
-    await client.send(DummyEvent(value=1))
+    await client.put(DummyEvent(value=1))
     recv = await server._out_queue.get()
     assert isinstance(recv, DummyEvent)
     assert recv.value == 1
 
-    await server.send(DummyEvent(value=2))
-    recv = await client._out_queue.get()
+    await client.send(DummyEvent(value=2))
+    recv = await server._out_queue.get()
     assert isinstance(recv, DummyEvent)
     assert recv.value == 2
+
+    await server.put(DummyEvent(value=3))
+    recv = await client._out_queue.get()
+    assert isinstance(recv, DummyEvent)
+    assert recv.value == 3
+
+    await server.send(DummyEvent(value=4))
+    recv = await client._out_queue.get()
+    assert isinstance(recv, DummyEvent)
+    assert recv.value == 4
 
     await client.stop()
     await server.stop()

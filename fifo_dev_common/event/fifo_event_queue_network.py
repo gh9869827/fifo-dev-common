@@ -17,6 +17,7 @@ import ssl
 import hashlib
 from typing import Optional, Sequence, cast
 from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventShutdown
+from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut
 from fifo_dev_common.logging.logger import get_logger
 
 logger = get_logger(__name__)
@@ -363,8 +364,23 @@ class _FifoEventQueueNetworkAsyncMixin:
         """
         await event.serialize_to_socket_async(self._writer)  # drain handled by serializer
 
+    async def put(self, event: FifoEvent) -> None:
+        """
+        Queue-like alias for send.
 
-class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin):
+        Provides compatibility with asyncio.PriorityQueue.put so that network
+        clients and servers can be used interchangeably with asyncio queues
+        expecting a put method.
+
+        Args:
+            event (FifoEvent):
+                Event to send over the network connection.
+        """
+
+        await self.send(event)
+
+
+class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, SupportsFifoEventPut):
     """
     Asyncio-based network client for sending and receiving FifoEvent objects over TCP.
 
@@ -548,7 +564,7 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin):
         await _bounded_close_and_wait_closed_writer(self._writer, timeout=3.0, label="client")
 
 
-class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin):
+class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, SupportsFifoEventPut):
     """
     Asyncio-based network server for sending and receiving FifoEvent objects over TCP.
 

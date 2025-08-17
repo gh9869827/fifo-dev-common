@@ -15,6 +15,7 @@ from fifo_dev_common.event.fifo_event import (
     FifoEventException,
     FifoEventResultWithCID
 )
+from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut
 from fifo_dev_common.logging.logger import get_logger
 
 
@@ -762,8 +763,9 @@ class FifoProcessManager:
         _async_in (asyncio.PriorityQueue[FifoEvent]):
             Async priority queue for incoming events in the main process.
 
-        _async_out (asyncio.PriorityQueue[FifoEvent]):
-            Async priority queue for outgoing events in the main process.
+        _async_out (SupportsFifoEventPut):
+            Object to receive outgoing events from the main process, such as an asyncio
+            priority queue or a `FifoEventQueueNetworkAsyncServer/Client`.
 
         _lock_cid (asyncio.Lock):
             Lock used to protect concurrent access to the `_received_cid` dictionary from multiple
@@ -774,6 +776,9 @@ class FifoProcessManager:
             Dictionary mapping correlation IDs to their tracking state (`_ReceivedCID`).
             Used to manage pending requests and match incoming ACK/DONE events to their
             corresponding futures.
+
+        _event_stopped (asyncio.Event):
+            Event signaling the worker has been stopped.
     """
 
     _in_queue: Queue[FifoEvent]
@@ -783,14 +788,15 @@ class FifoProcessManager:
     _pusher_thread: Thread
     _puller_thread: Thread
     _async_in: asyncio.PriorityQueue[FifoEvent]
-    _async_out: asyncio.PriorityQueue[FifoEvent]
+    _async_out: SupportsFifoEventPut
     _lock_cid: asyncio.Lock
     _received_cid: dict[UUID, _ReceivedCID]
+    _event_stopped: asyncio.Event
 
     def __init__(self,
                  loop: asyncio.AbstractEventLoop,
                  callback: FifoAsyncProcessWorkerCallback | FifoSyncProcessWorkerCallback,
-                 async_out: asyncio.PriorityQueue[FifoEvent]
+                 async_out: SupportsFifoEventPut
                  ) -> None:
         """
         Initialize the process manager with an event loop, worker callback, and async
@@ -803,8 +809,9 @@ class FifoProcessManager:
             callback (FifoAsyncProcessWorkerCallback | FifoSyncProcessWorkerCallback):
                 The worker callback (async or sync) to run in the worker process.
 
-            async_out (asyncio.PriorityQueue[FifoEvent]):
-                Async priority queue for outgoing events in the main process.
+            async_out (SupportsFifoEventPut):
+                Object to receive outgoing events from the main process, such as an asyncio
+                priority queue or a `FifoEventQueueNetworkAsyncServer/Client`.
         """
         self._loop = loop
 
@@ -826,6 +833,8 @@ class FifoProcessManager:
 
         self._pusher_thread = Thread(target=self._in_queue_pusher)
         self._puller_thread = Thread(target=self._out_queue_puller)
+
+        self._event_stopped = asyncio.Event()
 
     def start(self) -> None:
         """
@@ -853,10 +862,7 @@ class FifoProcessManager:
         await self._async_in.put(FifoEventShutdown())
 
         _trace("[FifoProcessManager.fct:stop] Awaiting worker shutdown confirmation")
-        while True:
-            event: FifoEvent = await self._async_out.get()
-            if isinstance(event, FifoEventShutdown):
-                break
+        await self._event_stopped.wait()
         _trace("[FifoProcessManager.fct:stop] Received FifoEventShutdown confirmation from worker")
 
     def join(self) -> None:
@@ -1035,5 +1041,7 @@ class FifoProcessManager:
                 asyncio.run_coroutine_threadsafe(self._async_out.put(event), self._loop)
             _trace("[FifoProcessManager.thread:_out_queue_puller] Received event from worker process")  # pylint: disable=line-too-long
             if isinstance(event, FifoEventShutdown):
+                self._loop.call_soon_threadsafe(self._event_stopped.set)
+                asyncio.run_coroutine_threadsafe(self._async_out.put(event), self._loop)
                 _trace("[FifoProcessManager.thread:_out_queue_puller] Shutdown event received; stopping thread")  # pylint: disable=line-too-long
                 break

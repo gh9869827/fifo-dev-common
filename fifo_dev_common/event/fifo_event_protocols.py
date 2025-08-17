@@ -10,12 +10,12 @@ class SupportsFifoEventPut(Protocol):
     Protocol for accepting FifoEvent instances via put.
     """
 
-    async def put(self, event: FifoEvent) -> None:
+    async def put(self, item: FifoEvent) -> None:
         """
         Asynchronously enqueue a FifoEvent.
 
         Args:
-            event (FifoEvent):
+            item (FifoEvent):
                 Event to enqueue.
         """
 

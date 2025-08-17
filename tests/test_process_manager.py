@@ -230,7 +230,7 @@ async def test_update_received_correlation_id_unmatched():
     event = TestAck(code=EErrorCode.OK, correlation_id=uuid4())
 
     await manager._update_received_correlation_id(event)
-    queued = await manager._async_out.get()
+    queued = await out_queue.get()
     assert queued is event
 
 

@@ -364,7 +364,7 @@ class _FifoEventQueueNetworkAsyncMixin:
         """
         await event.serialize_to_socket_async(self._writer)  # drain handled by serializer
 
-    async def put(self, event: FifoEvent) -> None:
+    async def put(self, item: FifoEvent) -> None:
         """
         Queue-like alias for send.
 
@@ -373,11 +373,11 @@ class _FifoEventQueueNetworkAsyncMixin:
         expecting a put method.
 
         Args:
-            event (FifoEvent):
+            item (FifoEvent):
                 Event to send over the network connection.
         """
 
-        await self.send(event)
+        await self.send(item)
 
 
 class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, SupportsFifoEventPut):

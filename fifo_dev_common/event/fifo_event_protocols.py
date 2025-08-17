@@ -18,7 +18,6 @@ class SupportsFifoEventPut(Protocol):
             event (FifoEvent):
                 Event to enqueue.
         """
-        ...
 
 
 __all__ = ["SupportsFifoEventPut"]

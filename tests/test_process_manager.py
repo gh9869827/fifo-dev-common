@@ -108,7 +108,8 @@ class ErrorSyncCallback(FifoSyncProcessWorkerCallback):
 @pytest.mark.parametrize("timeout", [-1, 0, 0.5])
 async def test_async_process_manager_echo(timeout: float):
     loop = asyncio.get_event_loop()
-    process = FifoProcessManager(loop, DemoFifoAsyncProcessWorkerCallback(timeout=timeout))
+    out_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+    process = FifoProcessManager(loop, DemoFifoAsyncProcessWorkerCallback(timeout=timeout), out_queue)
     process.start()
 
     await process.send(FifoEvent(priority=2))
@@ -117,7 +118,7 @@ async def test_async_process_manager_echo(timeout: float):
 
     received: list[int] = []
     for _ in range(3):
-        event = await process.receive()
+        event = await out_queue.get()
         received.append(event.priority)
 
     await asyncio.sleep(1)
@@ -132,7 +133,8 @@ async def test_async_process_manager_echo(timeout: float):
 def test_sync_process_manager_echo():
     # Run sync worker in a subprocess, communicate via queues
     loop = asyncio.new_event_loop()
-    process = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback())
+    out_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+    process = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback(), out_queue)
     process.start()
 
     async def send_and_receive():
@@ -142,7 +144,7 @@ def test_sync_process_manager_echo():
 
         received: list[int] = []
         for _ in range(3):
-            event = await process.receive()
+            event = await out_queue.get()
             received.append(event.priority)
 
         await process.stop()
@@ -156,7 +158,8 @@ def test_sync_process_manager_echo():
 @pytest.mark.asyncio
 async def test_async_process_manager_shutdown_event():
     loop = asyncio.get_event_loop()
-    process = FifoProcessManager(loop, DemoFifoAsyncProcessWorkerCallback())
+    out_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+    process = FifoProcessManager(loop, DemoFifoAsyncProcessWorkerCallback(), out_queue)
     process.start()
 
     await process.send(FifoEventShutdown())
@@ -167,11 +170,12 @@ async def test_async_process_manager_shutdown_event():
 @pytest.mark.asyncio
 async def test_async_exception_event_propagation():
     loop = asyncio.get_event_loop()
-    process = FifoProcessManager(loop, ErrorAsyncCallback())
+    out_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+    process = FifoProcessManager(loop, ErrorAsyncCallback(), out_queue)
     process.start()
 
     await process.send(FifoEvent())
-    event = await process.receive()
+    event = await out_queue.get()
 
     assert isinstance(event, FifoEventException)
     assert event.class_name == "RuntimeError"
@@ -183,12 +187,13 @@ async def test_async_exception_event_propagation():
 
 def test_sync_exception_event_propagation():
     loop = asyncio.new_event_loop()
-    process = FifoProcessManager(loop, ErrorSyncCallback())
+    out_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+    process = FifoProcessManager(loop, ErrorSyncCallback(), out_queue)
     process.start()
 
     async def send_and_receive():
         await process.send(FifoEvent())
-        event = await process.receive()
+        event = await out_queue.get()
         await process.stop()
         process.join()
         return event
@@ -220,7 +225,8 @@ class TestDone(FifoEventResultWithCID):
 @pytest.mark.asyncio
 async def test_update_received_correlation_id_unmatched():
     loop = asyncio.get_event_loop()
-    manager = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback())
+    out_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+    manager = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback(), out_queue)
     event = TestAck(code=EErrorCode.OK, correlation_id=uuid4())
 
     await manager._update_received_correlation_id(event)
@@ -231,7 +237,8 @@ async def test_update_received_correlation_id_unmatched():
 @pytest.mark.asyncio
 async def test_send_and_wait_response_ack_done():
     loop = asyncio.get_event_loop()
-    manager = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback())
+    out_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+    manager = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback(), out_queue)
     request = TestRequest()
 
     task = asyncio.create_task(
@@ -253,7 +260,8 @@ async def test_send_and_wait_response_ack_done():
 @pytest.mark.asyncio
 async def test_send_and_wait_response_ack_error():
     loop = asyncio.get_event_loop()
-    manager = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback())
+    out_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+    manager = FifoProcessManager(loop, DemoFifoSyncProcessWorkerCallback(), out_queue)
     request = TestRequest()
 
     task = asyncio.create_task(
@@ -299,7 +307,8 @@ async def test_send_and_wait_response_end_to_end():
     """Verify send_and_wait_response works with a running process manager."""
     loop = asyncio.get_event_loop()
 
-    manager = FifoProcessManager(loop, Worker())
+    out_queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+    manager = FifoProcessManager(loop, Worker(), out_queue)
     manager.start()
 
     done = await manager.send_and_wait_response(TestRequest(), TestAck, TestDone)

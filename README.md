@@ -26,6 +26,7 @@ It provides the following for runtime type checks and casting, docstring parsing
 - `class FifoEvent`: Base class for binary-serializable events, with factory deserialization and class registration for cross-system use.
 - `class FifoEventQueueForwarderMpToAsync`: Bridges multiprocessing and asyncio event queues via a background thread.
 - `class FifoEventQueueNetworkAsyncClient` / `class FifoEventQueueNetworkAsyncServer`: Asyncio-based network communication for FifoEvent objects over TCP with optional TLS 1.3 encryption.
+- `class FifoProcessManager`: Runs a worker in a separate process and bridges multiprocessing queues with asyncio. Requires an async priority queue for outgoing events.
 - `get_logger()`: Returns a logger instance with `.trace()` support for fine-grained debugging. Registers a custom TRACE level and logger class.
 
 ## 📚 Table of Contents
@@ -42,6 +43,7 @@ It provides the following for runtime type checks and casting, docstring parsing
   - [fifo_event](#fifo_dev_commoneventfifo_event)
   - [fifo_event_queue_forwarder](#fifo_dev_commoneventfifo_event_queue_forwarder)
   - [fifo_event_queue_network](#fifo_dev_commoneventfifo_event_queue_network)
+  - [fifo_process_manager](#fifo_dev_commonprocessutilsfifo_process_manager)
   - [logger](#fifo_dev_commonlogginglogger)
 - [🧪 Tests](#-tests)
 - [📄 License](#-license)
@@ -910,6 +912,44 @@ async def run_client():
 # Run server and client (in practice, these would be separate processes)
 async def main():
     await asyncio.gather(run_server(), run_client())
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+---
+
+### `fifo_dev_common.process.utils.FifoProcessManager`
+
+Run a worker in a separate process and bridge multiprocessing queues with asyncio.
+
+**Example:**
+
+```python
+import asyncio
+from fifo_dev_common.process.utils import FifoProcessManager, FifoAsyncProcessWorkerCallback
+from fifo_dev_common.event.fifo_event import FifoEvent
+
+class Echo(FifoAsyncProcessWorkerCallback):
+    def initialize(self, outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
+        pass
+
+    def finalize(self, outgoing_queue: asyncio.PriorityQueue[FifoEvent]):
+        pass
+
+    async def loop(self, incoming_event, incoming_queue_size, outgoing_queue):
+        if incoming_event is not None:
+            await outgoing_queue.put(incoming_event)
+
+async def main():
+    loop = asyncio.get_running_loop()
+    out_q: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
+    mgr = FifoProcessManager(loop, Echo(), out_q)
+    mgr.start()
+    await mgr.send(FifoEvent())
+    event = await out_q.get()
+    await mgr.stop()
+    mgr.join()
 
 if __name__ == "__main__":
     asyncio.run(main())

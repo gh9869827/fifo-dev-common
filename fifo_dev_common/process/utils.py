@@ -729,14 +729,14 @@ class FifoProcessManager:
     sync), and manages the threads that transfer events in both directions between the main process
     and the worker process.
 
-    It provides async methods for sending and receiving events, and ensures clean shutdown by
+    It provides async methods for sending events, and ensures clean shutdown by
     propagating shutdown events and joining all threads and the process.
 
     Usage:
-        - Instantiate with an event loop and a worker callback (async or sync).
+        - Instantiate with an event loop, a worker callback (async or sync), and an async
+          output queue.
         - Call `start()` to launch the worker process and communication threads.
-        - Use `send()`, `send_and_wait_response()` and `receive()` to asynchronously
-          exchange events.
+        - Use `send()` and `send_and_wait_response()` to asynchronously send events.
         - Call `stop()` to shut down the worker process.
         - Call `join()` to wait for all threads and the process to exit.
 
@@ -790,11 +790,11 @@ class FifoProcessManager:
     def __init__(self,
                  loop: asyncio.AbstractEventLoop,
                  callback: FifoAsyncProcessWorkerCallback | FifoSyncProcessWorkerCallback,
-                 async_out: asyncio.PriorityQueue[FifoEvent] | None = None
+                 async_out: asyncio.PriorityQueue[FifoEvent]
                  ) -> None:
         """
-        Initialize the process manager with an event loop, worker callback, and optional async
-        output queue. If no async output queue is provided, a new one is created.
+        Initialize the process manager with an event loop, worker callback, and async
+        output queue.
 
         Args:
             loop (asyncio.AbstractEventLoop):
@@ -803,8 +803,8 @@ class FifoProcessManager:
             callback (FifoAsyncProcessWorkerCallback | FifoSyncProcessWorkerCallback):
                 The worker callback (async or sync) to run in the worker process.
 
-            async_out (asyncio.PriorityQueue[FifoEvent] | None):
-                Optional async priority queue for outgoing events in the main process.
+            async_out (asyncio.PriorityQueue[FifoEvent]):
+                Async priority queue for outgoing events in the main process.
         """
         self._loop = loop
 
@@ -815,7 +815,7 @@ class FifoProcessManager:
         self._out_queue = Queue()
 
         self._async_in: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
-        self._async_out = asyncio.PriorityQueue() if async_out is None else async_out
+        self._async_out = async_out
 
         if isinstance(callback, FifoAsyncProcessWorkerCallback):
             self._proc = Process(target=_runner_async,
@@ -940,19 +940,6 @@ class FifoProcessManager:
         _trace("[FifoProcessManager.fct:send] Result received (ack/done)")
 
         return result
-
-    async def receive(self) -> FifoEvent:
-        """
-        Asynchronously receive the next event from the worker process.
-
-        Returns:
-            FifoEvent:
-                The next event produced by the worker process.
-        """
-        _trace("[FifoProcessManager.fct:receive] Awaiting event from worker")
-        event = await self._async_out.get()
-        _trace("[FifoProcessManager.fct:receive] Event received from worker")
-        return event
 
     def _in_queue_pusher(self) -> None:
         """

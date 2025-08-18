@@ -137,6 +137,11 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
             Only basic types are supported inside the tuple. Nested tuples, arrays, or optional
             values are not supported in the current version.
 
+      - Optional fixed-size tuple of basic types:
+          - '?T<xy...>' where x, y, ... are struct format characters.
+            Example: '?T<II>' means an optional tuple of two ints.
+            Serialized as a 1-byte presence flag followed by the tuple data if present.
+
       - Fixed-length array of basic types:
           - '[x]' where x is a single struct format character.
             Example: '[f]' means a variable-length array of floats.
@@ -287,6 +292,25 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
                     _format_error("primitive types in arrays", _ALLOWED_STRUCT_FORMAT_CHARS)
                 )
             return FieldSpecCompiledArray(name, element_type)
+
+        if struct_format.startswith("?T<"):
+            if not (len(struct_format) >= 5 and struct_format[-1] == ">"):
+                raise ValueError(
+                    "Invalid format: tuple format must start with '?T<', end with '>', "
+                    "and contain at least one format character"
+                )
+            inner_types = struct_format[3:-1]
+            try:
+                struct.calcsize('<' + inner_types.replace('y', 'B'))
+            except struct.error as exc:
+                raise ValueError(
+                    "Invalid format: tuple format is not valid struct syntax"
+                ) from exc
+            if any(c not in _ALLOWED_STRUCT_FORMAT_CHARS for c in inner_types):
+                raise ValueError(
+                    _format_error("tuple types", _ALLOWED_STRUCT_FORMAT_CHARS)
+                )
+            return FieldSpecCompiledOptionalTuple(name, inner_types)
 
         if struct_format.startswith("?S["):
             if not struct_format.endswith("]"):
@@ -1973,6 +1997,96 @@ class FieldSpecCompiledTuple(FieldSpecCompiled):
                 The total byte size needed to serialize the tuple.
         """
         return self._struct_format_byte_length
+
+
+class FieldSpecCompiledOptionalTuple(FieldSpecCompiledTuple):
+    """
+    Optional fixed-size tuple of primitive values with presence flag.
+
+    Serializes a tuple prefixed by a one-byte presence flag. If the field
+    value is None, only the flag byte is written. Otherwise, the flag byte
+    is set to 1 followed by the packed tuple values using the configured
+    struct format.
+
+    Attributes:
+        struct_format (str):
+            Struct format string for the tuple elements.
+
+        _struct_format_byte_length (int):
+            The fixed size of the serialized tuple in bytes.
+    """
+
+    def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
+        """
+        Serialize the optional tuple field into the buffer starting at idx.
+
+        Args:
+            class_obj (Any):
+                Instance containing the field value.
+
+            buffer (bytearray):
+                Destination buffer for serialized bytes.
+
+            idx (int):
+                Starting index within the buffer.
+
+        Returns:
+            int:
+                Updated buffer index after writing data.
+        """
+        values = getattr(class_obj, self.name)
+        if values is None:
+            buffer[idx] = 0
+            return idx + 1
+        buffer[idx] = 1
+        struct.pack_into('<' + self.struct_format, buffer, idx + 1, *values)
+        return idx + 1 + self._struct_format_byte_length
+
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
+        """
+        Deserialize the optional tuple from the buffer starting at idx.
+
+        Args:
+            buffer (bytes):
+                Source buffer containing serialized data.
+
+            idx (int):
+                Starting index within the buffer.
+
+        Returns:
+            Tuple[Any, int]:
+                A tuple (value, new_idx) where value is either the
+                deserialized tuple or None if absent, and new_idx is the
+                index after reading the data.
+        """
+        present = buffer[idx]
+        idx += 1
+        if not present:
+            return None, idx
+        obj = struct.unpack_from('<' + self.struct_format, buffer, idx)
+        if self._has_bool:
+            obj = tuple(
+                bool(v) if flag else v
+                for v, flag in zip(obj, self._bool_flags)
+            )
+        return obj, idx + self._struct_format_byte_length
+
+    def serialized_byte_size(self, class_obj: Any) -> int:
+        """
+        Compute the byte size of the serialized optional tuple field.
+
+        Args:
+            class_obj (Any):
+                Instance containing the field value.
+
+        Returns:
+            int:
+                Total number of bytes required to serialize this field.
+        """
+        values = getattr(class_obj, self.name)
+        if values is None:
+            return 1
+        return 1 + self._struct_format_byte_length
 
 
 class FieldSpecCompiledGeneric(FieldSpecCompiled):

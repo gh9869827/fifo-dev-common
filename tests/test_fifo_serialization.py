@@ -251,6 +251,32 @@ def test_tuple_mixed():
 
 @serializable
 @dataclass
+class TestOptionalTuple(FifoSerializable):
+    maybe: tuple[int, float] | None = field(metadata={"format": "?T<If>"})
+
+
+def test_optional_tuple_roundtrip() -> None:
+    obj = TestOptionalTuple((7, 1.5))
+    size = obj.serialized_byte_size()
+    assert size == 1 + struct.calcsize('<If')
+    buf = bytearray(size)
+    obj.serialize_to_bytes(buf, 0)
+    restored, _ = TestOptionalTuple.deserialize_from_bytes(buf, 0)
+    assert restored.maybe is not None
+    assert restored.maybe[0] == 7
+    assert math.isclose(restored.maybe[1], 1.5, rel_tol=1e-6, abs_tol=1e-8)
+
+    obj_none = TestOptionalTuple(None)
+    size_none = obj_none.serialized_byte_size()
+    assert size_none == 1
+    buf2 = bytearray(size_none)
+    obj_none.serialize_to_bytes(buf2, 0)
+    restored_none, _ = TestOptionalTuple.deserialize_from_bytes(buf2, 0)
+    assert restored_none.maybe is None
+
+
+@serializable
+@dataclass
 class TestOptionalArray(FifoSerializable):
     items: list[TestBasic | None] = field(metadata={"format": "[?_]", "ptype": TestBasic})
 
@@ -373,6 +399,12 @@ def test_super_combo():
     ("T<__>", None, "Invalid format: tuple format is not valid struct syntax"),
     ("T<x>", None, "Format string for tuple types only supports the following characters"),
     ("T<bBx>", None, "Format string for tuple types only supports the following characters"),
+
+    ("?T<", None, "Invalid format: tuple format must start with '\\?T<', end with '>', and contain at least one format character"),
+    ("?T<>", None, "Invalid format: tuple format must start with '\\?T<', end with '>', and contain at least one format character"),
+    ("?T<__>", None, "Invalid format: tuple format is not valid struct syntax"),
+    ("?T<x>", None, "Format string for tuple types only supports the following characters"),
+    ("?T<bBx>", None, "Format string for tuple types only supports the following characters"),
 
     ("S[", None, "Invalid format: fixed-length string must end with ']'"),
     ("S[]", None, "Invalid format: fixed-length string must contain a numeric length"),

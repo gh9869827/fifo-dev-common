@@ -83,6 +83,25 @@ def test_basic():
 
 @serializable
 @dataclass
+class TestExplicitNested(FifoSerializable):
+    item: TestBasic = field(metadata={"format": "_", "ptype": TestBasic})
+
+
+def test_explicit_nested_format():
+    obj = TestExplicitNested(TestBasic(5, 6))
+    size = obj.serialized_byte_size()
+    expected = TestBasic(0, 0).serialized_byte_size()
+    assert size == expected
+
+    buf = bytearray(size)
+    obj.serialize_to_bytes(buf, 0)
+
+    restored, _ = TestExplicitNested.deserialize_from_bytes(buf, 0)
+    assert restored.item.a == 5 and restored.item.b == 6
+
+
+@serializable
+@dataclass
 class TestOptional(FifoSerializable):
     a: int | None = field(metadata={"format": "?I"})
     b: int | None = field(metadata={"format": "?I"})
@@ -382,7 +401,9 @@ def test_super_combo():
     ("[x]", None, "Format string for primitive types in arrays only supports the following characters"),
 
     ("P",   None, "Format string for primitive types only supports the following characters"),
-    
+
+    ("_",   None, "Type must be provided for generic object"),
+
     ("?",   None, "Invalid format: optional format must be two characters"),
     ("?__", None, "Invalid format: optional format must be two characters"),
     ("?_",  None, "Type must be provided for generic optional"),
@@ -425,6 +446,8 @@ def test_compile_field_value_errors(format_string: str | None, ptype: Type[Any] 
     metadata = {}
     if format_string is not None:
         metadata["format"] = format_string
+    if ptype is not None:
+        metadata["ptype"] = ptype
     # Simulate a dataclass Field with .name and .metadata
     mock_field = SimpleNamespace(name="x", metadata=metadata, ptype=ptype)
     with pytest.raises(ValueError, match=err_msg):

@@ -164,6 +164,10 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
           - '?_' indicates an optional nested object.
             Requires 'ptype' metadata specifying the nested class type.
 
+      - Generic nested serializable object:
+          - '_' indicates a nested object.
+            Requires 'ptype' metadata specifying the class type.
+
       - Generic array of nested serializable objects:
           - '[_]' indicates a variable-length array of nested objects.
             Requires 'ptype' metadata specifying the element class type.
@@ -174,7 +178,7 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
             Requires 'ptype' metadata specifying the element class type.
 
       - No format specified:
-          - Assumes a nested serializable object.
+          - Assumes a nested serializable object (same as specifying '_').
             Requires 'ptype' metadata specifying the class type.
 
     Args:
@@ -234,6 +238,10 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
         return FieldSpecCompiledCustom(name, serialize_fn, deserialize_fn, bytelength_fn)
 
     if struct_format is not None:
+        if struct_format == "_":
+            if ptype is None:
+                raise ValueError("Type must be provided for generic object")
+            return FieldSpecCompiledGeneric(name, ptype)
         if struct_format[0] == "[":
             if struct_format.startswith("[np:"):
                 if not struct_format.endswith("]"):

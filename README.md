@@ -388,6 +388,7 @@ Provides a lightweight, efficient binary serialization framework for Python data
 | `?S`       | **Optional variable-length UTF-8 string** | 1-byte presence flag + 4-byte length + UTF-8 encoded bytes            | -
 | `?S[x]`    | **Optional fixed-length UTF-8 string**    | 1-byte presence flag + UTF-8 encoded, space-padded or truncated to `x` bytes | -
 | `E<x>`     | **Enum stored as integer**           | Stored as `x` (e.g., `B`, `H`, `I`)                                    | `x` must be one of: `b B h H i I`                                     |
+| `_`        | **Nested object**                    | Nested serialization using `ptype`                                     | Requires `ptype`; equivalent to omitting `format`                     |
 | `?_`       | **Optional nested object**           | 1-byte presence flag + nested serialization if present                 | -                                                                     |
 | `[_]`      | **Array of nested objects**          | 4-byte length prefix + consecutive nested serializations               | -                                                                     |
 | `[?_]`     | **Array of optional nested objects** | 4-byte length + presence bitmap + serialized present objects           | -                                                                     |

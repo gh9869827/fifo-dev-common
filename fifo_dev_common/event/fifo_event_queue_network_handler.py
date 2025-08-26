@@ -112,7 +112,7 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
         """
         if isinstance(event, FifoEventShutdown):
             await self._queue.put((_async_noop, event))
-            return True
+            return False  # Always propagate shutdown event to the out queue
         return False
 
 

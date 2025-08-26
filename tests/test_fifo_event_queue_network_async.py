@@ -81,9 +81,13 @@ class DummyAck(FifoEventResultWithCID):
     """Acknowledgement event with correlation ID."""
     event_id: ClassVar[int] = 5002
 
-    def __init__(self, *, correlation_id, priority: int = -1):
+    def __init__(self,
+                 code: EErrorCode,
+                 correlation_id: UUID,
+                 message: str | None = None,
+                 priority: int = -1):
         super().__init__(
-            code=EErrorCode.OK, correlation_id=correlation_id, priority=priority
+            code=code, correlation_id=correlation_id, priority=priority, message=message
         )
 
 
@@ -94,9 +98,13 @@ class DummyAckFail(FifoEventResultWithCID):
     """Negative acknowledgement with correlation ID."""
     event_id: ClassVar[int] = 5003
 
-    def __init__(self, *, correlation_id, priority: int = -1):
+    def __init__(self,
+                 code: EErrorCode,
+                 correlation_id: UUID,
+                 message: str | None = None,
+                 priority: int = -1):
         super().__init__(
-            code=EErrorCode.FAIL, correlation_id=correlation_id, priority=priority
+            code=code, correlation_id=correlation_id, priority=priority, message=message
         )
 
 
@@ -107,9 +115,13 @@ class DummyDoneSuccess(FifoEventResultWithCID):
     """Completion event indicating success."""
     event_id: ClassVar[int] = 5004
 
-    def __init__(self, *, correlation_id, priority: int = -1):
+    def __init__(self,
+                 code: EErrorCode,
+                 correlation_id: UUID,
+                 message: str | None = None,
+                 priority: int = -1):
         super().__init__(
-            code=EErrorCode.OK, correlation_id=correlation_id, priority=priority
+            code=code, correlation_id=correlation_id, priority=priority, message=message
         )
 
 
@@ -120,9 +132,13 @@ class DummyDoneFailure(FifoEventResultWithCID):
     """Completion event indicating failure."""
     event_id: ClassVar[int] = 5005
 
-    def __init__(self, *, correlation_id, priority: int = -1):
+    def __init__(self,
+                 code: EErrorCode,
+                 correlation_id: UUID,
+                 message: str | None = None,
+                 priority: int = -1):
         super().__init__(
-            code=EErrorCode.FAIL, correlation_id=correlation_id, priority=priority
+            code=code, correlation_id=correlation_id, priority=priority, message=message
         )
 
 
@@ -224,7 +240,7 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
 
     await client.send(req)
     srv_req = await server._out_queue.get()
-    await server.send(DummyAck(correlation_id=srv_req.correlation_id))
+    await server.send(DummyAck(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
 
     ack = await asyncio.wait_for(received, 1.0)
     assert isinstance(ack, DummyAck)
@@ -270,9 +286,9 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
 
     await client.send(req)
     srv_req = await server._out_queue.get()
-    await server.send(DummyAck(correlation_id=srv_req.correlation_id))
+    await server.send(DummyAck(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
     await asyncio.wait_for(ack_event.wait(), 1.0)
-    await server.send(DummyDoneSuccess(correlation_id=srv_req.correlation_id))
+    await server.send(DummyDoneSuccess(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
     await asyncio.wait_for(done_event.wait(), 1.0)
     assert client._out_queue.empty()
 
@@ -317,10 +333,10 @@ async def test_cid_handler_chain_stops_on_failure(unused_tcp_port: int):
 
     await client.send(req)
     srv_req = await server._out_queue.get()
-    await server.send(DummyAckFail(correlation_id=srv_req.correlation_id))
+    await server.send(DummyAckFail(code=EErrorCode.ERROR, correlation_id=srv_req.correlation_id))
     await asyncio.wait_for(ack_event.wait(), 1.0)
 
-    await server.send(DummyDoneSuccess(correlation_id=srv_req.correlation_id))
+    await server.send(DummyDoneSuccess(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
     recv = await asyncio.wait_for(client._out_queue.get(), 1.0)
     assert isinstance(recv, DummyDoneSuccess)
 

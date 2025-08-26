@@ -24,6 +24,7 @@ from fifo_dev_common.event.fifo_event import (
 )
 from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut
 from fifo_dev_common.event.fifo_event_queue_network_handler import (
+    ExpectedEventClasses,
     FifoEventQueueNetworkAsyncHandlerBase,
     FifoEventQueueNetworkAsyncHandlerCID,
 )
@@ -378,7 +379,7 @@ class _FifoEventQueueNetworkAsyncMixin:
 
     def register(self,
                  event: FifoEventWithCID,
-                 expected_cls: Sequence[type[FifoEventResultWithCID]] | Sequence[Sequence[type[FifoEventResultWithCID]]],
+                 expected_cls: ExpectedEventClasses,
                  callback: Callable[[FifoEventResultWithCID], Awaitable[bool]]):
         """
         Register a callback to be invoked when a matching event is received.
@@ -387,9 +388,9 @@ class _FifoEventQueueNetworkAsyncMixin:
             event (FifoEventWithCID):
                 The event being sent that carries a correlation identifier.
 
-            expected_cls (Sequence[type[FifoEventResultWithCID]] | Sequence[Sequence[type[FifoEventResultWithCID]]]):
-                One or more sequences of expected response event classes. Each inner
-                sequence represents a stage of possible events, processed in order.
+            expected_cls (ExpectedEventClasses):
+                Sequence of stages; each stage is either a single event class or a
+                sequence of event classes. Example: [A, [B, C], D].
 
             callback (Callable[[FifoEventResultWithCID], Awaitable[bool]]):
                 Asynchronous method invoked when the event is received. It returns

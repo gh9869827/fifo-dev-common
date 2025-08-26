@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Awaitable, Callable, Dict, Sequence
+from typing import Awaitable, Callable, Dict, Sequence, TypeAlias
 from uuid import UUID
 
 from fifo_dev_common.event.fifo_event import (
@@ -15,6 +15,21 @@ from fifo_dev_common.logging.logger import get_logger
 
 logger = get_logger(__name__)
 
+# User-facing alias: a sequence where each element represents one stage.
+# An element can be either a single event class (single expected type for that stage)
+# or a sequence of event classes (any of those types may satisfy the stage).
+# Example accepted forms:
+#   [A, B, C] => [[A], [B], [C]]
+#   [A, [B, C], D] => [[A], [B, C], [D]]
+# This keeps register() expressive: each position is a progression stage.
+StageElement: TypeAlias = (
+    type[FifoEventResultWithCID] | Sequence[type[FifoEventResultWithCID]]
+)
+ExpectedEventClasses: TypeAlias = Sequence[StageElement]
+
+# Internal canonical form: always list of stages, each stage a list of types
+NormalizedExpected: TypeAlias = list[list[type[FifoEventResultWithCID]]]
+
 
 async def _async_noop(_: FifoEvent) -> None:
     """
@@ -24,11 +39,12 @@ async def _async_noop(_: FifoEvent) -> None:
 
 
 class FifoEventQueueNetworkAsyncHandlerBase(ABC):
-    """Base class for asynchronous network event handlers.
+    """
+    Base class for asynchronous network event handlers.
 
     This handler processes callbacks on a background task so that the network
-    reader is never blocked. Derived classes should implement :py:meth:`register`
-    and may override :py:meth:`process_event`.
+    reader is never blocked. Derived classes should implement `register`
+    and may override `process_event`.
     """
 
     def __init__(self) -> None:
@@ -46,8 +62,11 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
                 break
             try:
                 await callback(event)
-            except Exception:  # pragma: no cover
-                logger.exception("handler callback failed")
+            except (TypeError, AttributeError, ValueError, RuntimeError, asyncio.CancelledError):
+                logger.error("handler callback failed")
+            except Exception:  # pragma: no cover # pylint: disable=broad-exception-caught
+                # Fallback for any other unexpected exceptions
+                logger.exception("handler callback failed with unexpected exception")
 
     async def join(self) -> None:
         """
@@ -58,7 +77,7 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
     @abstractmethod
     def register(self,
                  event: FifoEventWithCID,
-                 expected_cls: Sequence[type[FifoEventResultWithCID]] | Sequence[Sequence[type[FifoEventResultWithCID]]],
+                 expected_cls: ExpectedEventClasses,
                  callback: Callable[[FifoEventResultWithCID], Awaitable[bool]]) -> None:
         """
         Register a callback for a specific incoming event.
@@ -67,9 +86,9 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
             event (FifoEventWithCID):
                 Event object being sent and for which a response is expected.
 
-            expected_cls (Sequence[type[FifoEventResultWithCID]] | Sequence[Sequence[type[FifoEventResultWithCID]]]):
-                One or more sequences of expected event classes. Each inner sequence
-                represents a stage of possible events processed in order.
+            expected_cls (ExpectedEventClasses):
+                Sequence of stages; each stage is either a single event class or a
+                sequence of event classes. Example: [A, [B, C], D].
 
             callback (Callable[[FifoEventResultWithCID], Awaitable[bool]]):
                 Asynchronous function invoked when the matching event is received. It
@@ -98,7 +117,9 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
 
 
 class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase):
-    """Handler that matches events using correlation IDs."""
+    """
+    Handler that matches events using correlation IDs.
+    """
 
     def __init__(self) -> None:
         """
@@ -108,7 +129,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         self._registrations: Dict[
             UUID,
             tuple[
-                list[list[type[FifoEventResultWithCID]]],
+                NormalizedExpected,
                 Callable[[FifoEventResultWithCID], Awaitable[bool]],
                 int,
             ],
@@ -117,7 +138,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
 
     def register(self,
                  event: FifoEventWithCID,
-                 expected_cls: Sequence[type[FifoEventResultWithCID]] | Sequence[Sequence[type[FifoEventResultWithCID]]],
+                 expected_cls: ExpectedEventClasses,
                  callback: Callable[[FifoEventResultWithCID], Awaitable[bool]]) -> None:
         """
         Register a callback for an expected event with the same correlation ID.
@@ -126,8 +147,9 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             event (FifoEventWithCID):
                 The event that was sent and from which the correlation ID is taken.
 
-            expected_cls (Sequence[type[FifoEventResultWithCID]] | Sequence[Sequence[type[FifoEventResultWithCID]]]):
-                One or more sequences of event classes that may be received in order.
+            expected_cls (ExpectedEventClasses):
+                Sequence of stages; each stage is either a single event class or a
+                sequence of event classes. Example: [A, [B, C], D].
 
             callback (Callable[[FifoEventResultWithCID], Awaitable[bool]]):
                 Asynchronous method to call when the matching event is received.
@@ -135,10 +157,12 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                 processing further events for this correlation ID.
         """
         cid = getattr(event, "correlation_id")
-        if expected_cls and isinstance(expected_cls[0], type):  # type: ignore[index]
-            seq = [list(expected_cls)]  # type: ignore[list-item]
-        else:
-            seq = [list(s) for s in expected_cls]  # type: ignore[arg-type]
+        seq: NormalizedExpected = []
+        for stage in expected_cls:
+            if isinstance(stage, type):  # single class -> one-item stage
+                seq.append([stage])
+            else:  # sequence of classes
+                seq.append([cls for cls in stage])
         self._registrations[cid] = (seq, callback, 0)
 
     async def process_event(self, event: FifoEvent) -> bool:

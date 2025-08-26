@@ -3,6 +3,7 @@ import asyncio
 import ssl
 from dataclasses import dataclass, field
 from typing import ClassVar
+from uuid import UUID
 
 import pytest
 import trustme
@@ -69,7 +70,7 @@ class DummyCID(FifoEventWithCID):
     event_id: ClassVar[int] = 5001
     value: int = field(metadata={"format": "i"})
 
-    def __init__(self, value: int, correlation_id=None, priority: int = -1):
+    def __init__(self, value: int, correlation_id: UUID | None=None, priority: int = -1):
         super().__init__(correlation_id=correlation_id, priority=priority)
         self.value = value
 
@@ -240,6 +241,7 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
 
     await client.send(req)
     srv_req = await server._out_queue.get()
+    assert isinstance(srv_req, FifoEventWithCID)
     await server.send(DummyAck(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
 
     ack = await asyncio.wait_for(received, 1.0)
@@ -286,6 +288,7 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
 
     await client.send(req)
     srv_req = await server._out_queue.get()
+    assert isinstance(srv_req, FifoEventWithCID)
     await server.send(DummyAck(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
     await asyncio.wait_for(ack_event.wait(), 1.0)
     await server.send(DummyDoneSuccess(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
@@ -333,6 +336,7 @@ async def test_cid_handler_chain_stops_on_failure(unused_tcp_port: int):
 
     await client.send(req)
     srv_req = await server._out_queue.get()
+    assert isinstance(srv_req, FifoEventWithCID)
     await server.send(DummyAckFail(code=EErrorCode.ERROR, correlation_id=srv_req.correlation_id))
     await asyncio.wait_for(ack_event.wait(), 1.0)
 

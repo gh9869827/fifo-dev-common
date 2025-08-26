@@ -825,6 +825,7 @@ Asyncio-based TCP transport for `FifoEvent` objects, with optional TLS 1.3 encry
 - `FifoEventQueueNetworkAsyncClient`: sends events immediately; receives events in a background task and enqueues them in a local `asyncio.PriorityQueue`.
 - `FifoEventQueueNetworkAsyncServer`: accepts **exactly one** client at a time (additional clients are rejected until the connection closes); sends events immediately and receives events in a background task, enqueuing them in a local `asyncio.PriorityQueue`.
 - `make_server_tls_context()` / `make_client_tls_context()`: helpers to build **TLS 1.3–only** SSL contexts.
+- Optional pre-queue async handlers to process and optionally consume incoming events; includes a built-in correlation-ID handler for acknowledgements.
 - Optional mutual TLS (mTLS): peer authentication.
 - Scope: transport layer only (no application-layer authentication/authorization).
 

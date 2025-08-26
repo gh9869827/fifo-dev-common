@@ -15,9 +15,18 @@ import threading
 import contextlib
 import ssl
 import hashlib
-from typing import Optional, Sequence, cast
-from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventShutdown
+from typing import Awaitable, Callable, Optional, Sequence, cast
+from fifo_dev_common.event.fifo_event import (
+    FifoEvent,
+    FifoEventShutdown,
+    FifoEventResultWithCID,
+    FifoEventWithCID,
+)
 from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut
+from fifo_dev_common.event.fifo_event_queue_network_handler import (
+    FifoEventQueueNetworkAsyncHandlerBase,
+    FifoEventQueueNetworkAsyncHandlerCID,
+)
 from fifo_dev_common.logging.logger import get_logger
 
 logger = get_logger(__name__)
@@ -310,6 +319,7 @@ class _FifoEventQueueNetworkAsyncMixin:
     _writer: asyncio.StreamWriter
     _out_queue: asyncio.PriorityQueue[FifoEvent]
     _task: asyncio.Task[None]
+    _handler: FifoEventQueueNetworkAsyncHandlerBase
 
     async def stop(self):
         """
@@ -344,7 +354,9 @@ class _FifoEventQueueNetworkAsyncMixin:
                 logger.error("[%s] Error receiving event: %r", role, type(e))
                 continue
 
-            await self._out_queue.put(event)
+            processed = await self._handler.process_event(event)
+            if not processed:
+                await self._out_queue.put(event)
             if isinstance(event, FifoEventShutdown):
                 break
 
@@ -363,6 +375,29 @@ class _FifoEventQueueNetworkAsyncMixin:
             ConnectionError: If the connection is closed or there's a network error.
         """
         await event.serialize_to_socket_async(self._writer)  # drain handled by serializer
+
+    def register(self,
+                 event: FifoEventWithCID,
+                 expected_cls: Sequence[type[FifoEventResultWithCID]] | Sequence[Sequence[type[FifoEventResultWithCID]]],
+                 callback: Callable[[FifoEventResultWithCID], Awaitable[bool]]):
+        """
+        Register a callback to be invoked when a matching event is received.
+
+        Args:
+            event (FifoEventWithCID):
+                The event being sent that carries a correlation identifier.
+
+            expected_cls (Sequence[type[FifoEventResultWithCID]] | Sequence[Sequence[type[FifoEventResultWithCID]]]):
+                One or more sequences of expected response event classes. Each inner
+                sequence represents a stage of possible events, processed in order.
+
+            callback (Callable[[FifoEventResultWithCID], Awaitable[bool]]):
+                Asynchronous method invoked when the event is received. It returns
+                True to continue waiting for subsequent stages or False to stop
+                processing further events for the correlation ID.
+        """
+
+        self._handler.register(event, expected_cls, callback)
 
     async def put(self, item: FifoEvent) -> None:
         """
@@ -413,17 +448,22 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
         _task (asyncio.Task[None]):
             Background asyncio task that continuously receives events from the network
             and places them in the output queue.
+
+        _handler (FifoEventQueueNetworkAsyncHandlerBase):
+            Handler used to process incoming events before queuing.
     """
     _reader: asyncio.StreamReader
     _writer: asyncio.StreamWriter
     _out_queue: asyncio.PriorityQueue[FifoEvent]
     _thread: threading.Thread
     _task: asyncio.Task[None]
+    _handler: FifoEventQueueNetworkAsyncHandlerBase
 
     def __init__(self,
                  reader: asyncio.StreamReader,
                  writer: asyncio.StreamWriter,
-                 out_queue: asyncio.PriorityQueue[FifoEvent] | None):
+                 out_queue: asyncio.PriorityQueue[FifoEvent] | None,
+                 handler: FifoEventQueueNetworkAsyncHandlerBase | None = None):
         """
         Initialize a FifoEventQueueNetworkAsyncClient with existing connection streams.
 
@@ -436,10 +476,15 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
 
             out_queue (asyncio.PriorityQueue[FifoEvent] | None):
                 Optional priority queue for received events. If None, a new queue is created.
+
+            handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
+                Handler used to process incoming events. If None, a default
+                correlation ID handler is used.
         """
         self._reader = reader
         self._writer = writer
         self._out_queue = out_queue or asyncio.PriorityQueue()
+        self._handler = handler or FifoEventQueueNetworkAsyncHandlerCID()
         self._task = asyncio.create_task(self._network_to_queue())
 
     @classmethod
@@ -447,6 +492,7 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
                       host: str,
                       port: int,
                       out_queue: asyncio.PriorityQueue[FifoEvent] | None = None,
+                      handler: FifoEventQueueNetworkAsyncHandlerBase | None = None,
                       *,
                       ssl_ctx: ssl.SSLContext | None = None,
                       server_hostname: str | None = None,
@@ -469,6 +515,10 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
 
             out_queue (asyncio.PriorityQueue[FifoEvent] | None, optional):
                 Optional priority queue for received events. If None, a new queue is created.
+
+            handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
+                Handler used to process incoming events. If None, a default
+                correlation ID handler is used.
 
             ssl_ctx (ssl.SSLContext | None, optional):
                 SSL context configured for TLS 1.3. If provided, enables TLS.
@@ -532,7 +582,7 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
         if ssl_ctx is not None:
             _log_tls_peer(writer, "client")
 
-        return cls(reader, writer, out_queue)
+        return cls(reader, writer, out_queue, handler)
 
     async def join(self, timeout: float = 5.0):
         """
@@ -562,6 +612,7 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
 
         # Close writer with a bounded wait
         await _bounded_close_and_wait_closed_writer(self._writer, timeout=3.0, label="client")
+        await self._handler.join()
 
 
 class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, SupportsFifoEventPut):
@@ -598,18 +649,23 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
         _task (asyncio.Task[None]):
             Background asyncio task that continuously receives events from the client
             and places them in the output queue.
+
+        _handler (FifoEventQueueNetworkAsyncHandlerBase):
+            Handler used to process incoming events before queuing.
     """
     _reader: asyncio.StreamReader
     _writer: asyncio.StreamWriter
     _server: asyncio.Server
     _out_queue: asyncio.PriorityQueue[FifoEvent]
     _task: asyncio.Task[None]
+    _handler: FifoEventQueueNetworkAsyncHandlerBase
 
     def __init__(self,
                  reader: asyncio.StreamReader,
                  writer: asyncio.StreamWriter,
                  server: asyncio.Server,
-                 out_queue: asyncio.PriorityQueue[FifoEvent] | None):
+                 out_queue: asyncio.PriorityQueue[FifoEvent] | None,
+                 handler: FifoEventQueueNetworkAsyncHandlerBase | None = None):
         """
         Initialize a FifoEventQueueNetworkAsyncServer with existing connection and server.
 
@@ -625,11 +681,16 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
 
             out_queue (asyncio.PriorityQueue[FifoEvent] | None):
                 Optional priority queue for received events. If None, a new queue is created.
+
+            handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
+                Handler used to process incoming events. If None, a default
+                correlation ID handler is used.
         """
         self._reader = reader
         self._writer = writer
         self._server = server
         self._out_queue = out_queue or asyncio.PriorityQueue()
+        self._handler = handler or FifoEventQueueNetworkAsyncHandlerCID()
         self._task = asyncio.create_task(self._network_to_queue())
 
     @classmethod
@@ -637,6 +698,7 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
                      host: str,
                      port: int,
                      out_queue: asyncio.PriorityQueue[FifoEvent] | None = None,
+                     handler: FifoEventQueueNetworkAsyncHandlerBase | None = None,
                      *,
                      ssl_ctx: ssl.SSLContext | None = None,
                      require_tls: bool = False):
@@ -658,6 +720,10 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
 
             out_queue (asyncio.PriorityQueue[FifoEvent] | None, optional):
                 Optional priority queue for received events. If None, a new queue is created.
+
+            handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
+                Handler used to process incoming events. If None, a default
+                correlation ID handler is used.
 
             ssl_ctx (ssl.SSLContext | None, optional):
                 SSL context configured for TLS 1.3. If provided, enables TLS for the server.
@@ -712,7 +778,7 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
 
         # Enforce "one client at a time": stop listening once connected (defer wait to join)
         server.close()
-        return cls(reader, writer, server, out_queue)
+        return cls(reader, writer, server, out_queue, handler)
 
     async def join(self, timeout: float = 5.0):
         """
@@ -745,3 +811,4 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
 
         # Listener was closed in accept(); now wait for it to finish closing
         await _bounded_wait_closed_server(self._server, timeout=3.0)
+        await self._handler.join()

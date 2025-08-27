@@ -19,6 +19,9 @@ from fifo_dev_common.event.fifo_event_queue_network import (
     FifoEventQueueNetworkAsyncClient,
     FifoEventQueueNetworkAsyncServer,
 )
+from fifo_dev_common.event.fifo_event_queue_network_handler import (
+    FifoEventQueueNetworkAsyncHandlerCID,
+)
 from fifo_dev_common.serialization.fifo_serialization import serializable
 
 # pylint: disable=protected-access
@@ -226,7 +229,8 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
     )
     await asyncio.sleep(0.01)
 
-    client = await FifoEventQueueNetworkAsyncClient.connect(host, port)
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    client = await FifoEventQueueNetworkAsyncClient.connect(host, port, handler=handler)
     server = await server_task
 
     received: asyncio.Future[FifoEventResultWithCID] = asyncio.Future()
@@ -237,7 +241,7 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
         received.set_result(ev)
         return True
 
-    client.register(req, [DummyAck], _cb)
+    handler.register(req, [DummyAck], _cb)
 
     await client.send(req)
     srv_req = await server._out_queue.get()
@@ -253,6 +257,7 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
     assert isinstance(await server._out_queue.get(), FifoEventShutdown)
     assert isinstance(await client._out_queue.get(), FifoEventShutdown)
     await asyncio.gather(client.join(), server.join())
+    await handler.join()
 
 
 @pytest.mark.asyncio
@@ -265,7 +270,8 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
     )
     await asyncio.sleep(0.01)
 
-    client = await FifoEventQueueNetworkAsyncClient.connect(host, port)
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    client = await FifoEventQueueNetworkAsyncClient.connect(host, port, handler=handler)
     server = await server_task
 
     ack_event = asyncio.Event()
@@ -280,7 +286,7 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
         done_event.set()
         return False
 
-    client.register(
+    handler.register(
         req,
         [[DummyAck], [DummyDoneSuccess, DummyDoneFailure]],
         _cb,
@@ -300,6 +306,7 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
     assert isinstance(await server._out_queue.get(), FifoEventShutdown)
     assert isinstance(await client._out_queue.get(), FifoEventShutdown)
     await asyncio.gather(client.join(), server.join())
+    await handler.join()
 
 
 @pytest.mark.asyncio
@@ -312,7 +319,8 @@ async def test_cid_handler_chain_stops_on_failure(unused_tcp_port: int):
     )
     await asyncio.sleep(0.01)
 
-    client = await FifoEventQueueNetworkAsyncClient.connect(host, port)
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    client = await FifoEventQueueNetworkAsyncClient.connect(host, port, handler=handler)
     server = await server_task
 
     ack_event = asyncio.Event()
@@ -328,7 +336,7 @@ async def test_cid_handler_chain_stops_on_failure(unused_tcp_port: int):
             return False
         return False
 
-    client.register(
+    handler.register(
         req,
         [[DummyAck, DummyAckFail], [DummyDoneSuccess, DummyDoneFailure]],
         _cb,
@@ -349,3 +357,4 @@ async def test_cid_handler_chain_stops_on_failure(unused_tcp_port: int):
     assert isinstance(await server._out_queue.get(), FifoEventShutdown)
     assert isinstance(await client._out_queue.get(), FifoEventShutdown)
     await asyncio.gather(client.join(), server.join())
+    await handler.join()

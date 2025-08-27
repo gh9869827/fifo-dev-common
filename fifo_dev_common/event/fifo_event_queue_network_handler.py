@@ -42,20 +42,57 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
     """
     Base class for asynchronous network event handlers.
 
-    This handler processes callbacks on a background task so that the network
-    reader is never blocked. Derived classes should implement `register`
-    and may override `process_event`.
+    A handler examines each incoming event and returns ``True`` when the event has
+    been consumed and should not be placed into the caller's queue. Returning
+    ``False`` allows the event to fall through to the queue for further processing
+    by the application.
+    """
+
+    @abstractmethod
+    async def process_event(self, event: FifoEvent) -> bool:
+        """
+        Process an incoming event.
+
+        Args:
+            event (FifoEvent):
+                Incoming event from the network.
+
+        Returns:
+            bool:
+                ``True`` if the event was handled by the handler and should not
+                be queued for application consumption, otherwise ``False``.
+        """
+        raise NotImplementedError
+
+
+class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase):
+    """
+    Handler that matches events using correlation IDs.
+
+    Registered callbacks are executed on a background task so that the network
+    reader is never blocked.
     """
 
     def __init__(self) -> None:
         """
-        Initialize the handler and start the background processing task.
+        Initialize the correlation ID handler and start the background task that
+        dispatches callbacks.
         """
         self._queue: asyncio.Queue[tuple[Callable[[FifoEvent], Awaitable[None]], FifoEvent]]
         self._queue = asyncio.Queue()
         self._task = asyncio.create_task(self._run())
+        self._registrations: Dict[
+            UUID,
+            tuple[
+                NormalizedExpected,
+                Callable[[FifoEventResultWithCID], Awaitable[bool]],
+                int,
+            ],
+        ]
+        self._registrations = {}
 
     async def _run(self) -> None:
+        """Process queued callbacks until a shutdown event is received."""
         while True:
             callback, event = await self._queue.get()
             if isinstance(event, FifoEventShutdown):
@@ -69,72 +106,8 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
                 logger.exception("handler callback failed with unexpected exception")
 
     async def join(self) -> None:
-        """
-        Wait for the handler background task to finish.
-        """
+        """Wait for the background task to finish."""
         await self._task
-
-    @abstractmethod
-    def register(self,
-                 event: FifoEventWithCID,
-                 expected_cls: ExpectedEventClasses,
-                 callback: Callable[[FifoEventResultWithCID], Awaitable[bool]]) -> None:
-        """
-        Register a callback for a specific incoming event.
-
-        Args:
-            event (FifoEventWithCID):
-                Event object being sent and for which a response is expected.
-
-            expected_cls (ExpectedEventClasses):
-                Sequence of stages; each stage is either a single event class or a
-                sequence of event classes. Example: [A, [B, C], D].
-
-            callback (Callable[[FifoEventResultWithCID], Awaitable[bool]]):
-                Asynchronous function invoked when the matching event is received. It
-                returns True to continue to the next stage or False to stop further
-                processing for the correlation ID.
-        """
-
-    async def process_event(self, event: FifoEvent) -> bool:
-        """
-        Process an incoming event.
-
-        Args:
-            event (FifoEvent):
-                Incoming event from the network.
-
-        Returns:
-            bool:
-                True if the event has been processed by the handler and should
-                not be inserted into the out queue. False if it was not handled
-                and should be queued for further processing.
-        """
-        if isinstance(event, FifoEventShutdown):
-            await self._queue.put((_async_noop, event))
-            return False  # Always propagate shutdown event to the out queue
-        return False
-
-
-class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase):
-    """
-    Handler that matches events using correlation IDs.
-    """
-
-    def __init__(self) -> None:
-        """
-        Initialize the correlation ID handler.
-        """
-        super().__init__()
-        self._registrations: Dict[
-            UUID,
-            tuple[
-                NormalizedExpected,
-                Callable[[FifoEventResultWithCID], Awaitable[bool]],
-                int,
-            ],
-        ]
-        self._registrations = {}
 
     def register(self,
                  event: FifoEventWithCID,
@@ -149,25 +122,43 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
 
             expected_cls (ExpectedEventClasses):
                 Sequence of stages; each stage is either a single event class or a
-                sequence of event classes. Example: [A, [B, C], D].
+                sequence of event classes. Example: ``[A, [B, C], D]``.
 
             callback (Callable[[FifoEventResultWithCID], Awaitable[bool]]):
-                Asynchronous method to call when the matching event is received.
-                It returns True to continue to the next stage or False to stop
+                Asynchronous function to invoke when the matching event is received.
+                It returns ``True`` to continue to the next stage or ``False`` to stop
                 processing further events for this correlation ID.
         """
         cid = getattr(event, "correlation_id")
         seq: NormalizedExpected = []
         for stage in expected_cls:
-            if isinstance(stage, type):  # single class -> one-item stage
+            if isinstance(stage, type):
                 seq.append([stage])
-            else:  # sequence of classes
+            else:
                 seq.append([cls for cls in stage])
         self._registrations[cid] = (seq, callback, 0)
 
     async def process_event(self, event: FifoEvent) -> bool:
-        if await super().process_event(event):
-            return True
+        """
+        Process an incoming event.
+
+        If a registration for the event's correlation ID exists and the event
+        matches the next expected class, the associated callback is scheduled on
+        the background task and ``True`` is returned. Otherwise ``False`` is
+        returned so the caller may queue the event for further processing. A
+        ``FifoEventShutdown`` causes the background task to terminate.
+
+        Args:
+            event (FifoEvent):
+                Incoming event from the network.
+
+        Returns:
+            bool: ``True`` if the event was handled by this handler, otherwise
+            ``False``.
+        """
+        if isinstance(event, FifoEventShutdown):
+            await self._queue.put((_async_noop, event))
+            return False
 
         cid = getattr(event, "correlation_id", None)
         if cid is None:

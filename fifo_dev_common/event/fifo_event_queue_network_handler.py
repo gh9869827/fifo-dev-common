@@ -24,12 +24,13 @@ logger = get_logger(__name__)
 #   [A, [B, C], D] => [[A], [B, C], [D]]
 # This keeps register() expressive: each position is a progression stage.
 StageElement: TypeAlias = (
-    type[FifoEventResultWithCID] | Sequence[type[FifoEventResultWithCID]]
+               type[FifoEventResultWithCID] | type[FifoEventWithCID]
+    | Sequence[type[FifoEventResultWithCID] | type[FifoEventWithCID]]
 )
 ExpectedEventClasses: TypeAlias = Sequence[StageElement]
 
 # Internal canonical form: always list of stages, each stage a list of types
-NormalizedExpected: TypeAlias = list[list[type[FifoEventResultWithCID]]]
+NormalizedExpected: TypeAlias = list[list[type[FifoEventResultWithCID] | type[FifoEventWithCID]]]
 
 
 async def _async_noop(_: FifoEvent) -> None:

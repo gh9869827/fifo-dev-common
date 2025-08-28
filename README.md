@@ -28,6 +28,7 @@ It provides the following for runtime type checks and casting, docstring parsing
 - `class FifoEventQueueNetworkAsyncClient` / `class FifoEventQueueNetworkAsyncServer`: Asyncio-based network communication for FifoEvent objects over TCP with optional TLS 1.3 encryption.
 - `class FifoProcessManager`: Manager for running workers in separate OS processes with interprocess communication. Abstracts process creation, startup, and shutdown while bridging multiprocessing queues with asyncio. Supports both async and sync worker callbacks, with correlation ID tracking for request/response workflows.
 - `get_logger()`: Returns a logger instance with `.trace()` support for fine-grained debugging. Registers a custom TRACE level and logger class.
+- `class FifoRefreshableValue`: Lock-free cache for asynchronously refreshed values with explicit state transitions and immutable snapshots.
 
 ## 📚 Table of Contents
 
@@ -45,6 +46,7 @@ It provides the following for runtime type checks and casting, docstring parsing
   - [fifo_event_queue_network](#fifo_dev_commoneventfifo_event_queue_network)
   - [fifo_process_manager](#fifo_dev_commonprocessutilsfifo_process_manager)
   - [logger](#fifo_dev_commonlogginglogger)
+  - [fifo_refreshable_value](#fifo_dev_commonstatefifo_refreshable_value)
 - [🧪 Tests](#-tests)
 - [📄 License](#-license)
 
@@ -1000,6 +1002,45 @@ logger.info("Informational message")
 import logging
 logging.basicConfig(level=5)
 ```
+
+---
+
+### `fifo_dev_common.state.fifo_refreshable_value`
+
+Defines `FifoRefreshableValue[T]` — a lock-free, one-writer/many-readers cache
+for asynchronously refreshed values.
+
+The cache maintains an immutable `Snapshot` `(state, value, timestamp)` and
+supports explicit transitions via `mark_refreshing()`, `set_success()`,
+and `set_failure()`. States are managed through a simple state machine:
+`STALE → REFRESHING → FRESH/ERROR`.
+
+**Examples:**
+
+```python
+from fifo_dev_common.state.fifo_refreshable_value import (
+    FifoRefreshableValue,
+    CacheState,
+)
+
+# create a cache for float values (e.g., distances)
+cache = FifoRefreshableValue[float]()
+
+# writer side (e.g., from an async callback)
+cache.mark_refreshing()
+cache.set_success(1.23)    # publish a new value
+# cache.set_failure()      # publish an error state
+
+# reader side (control loop or other tasks)
+snap = cache.snapshot()
+if snap.state is CacheState.FRESH:
+    print(f"Latest value: {snap.value} at {snap.ts}")
+elif snap.state is CacheState.ERROR:
+    print("Value source reported an error")
+```
+
+> Readers always see either the old snapshot or the new one and never a torn or partially updated state.
+> For multiple writers across threads, funnel updates through a single owner (e.g., `loop.call_soon_threadsafe`).  
 
 ---
 

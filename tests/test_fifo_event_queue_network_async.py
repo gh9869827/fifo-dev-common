@@ -283,7 +283,8 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
     srv_req = await server._out_queue.get()
     assert isinstance(srv_req, FifoEventWithCID)
     await server.send(DummyAck(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
-    await asyncio.wait_for(ack_event.wait(), 1.0)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(ack_event.wait(), 1.0)
     await server.send(DummyDoneSuccess(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
     await asyncio.wait_for(done_event.wait(), 1.0)
     assert client._out_queue.empty()

@@ -298,7 +298,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
 
         if is_failure:
             await self._queue.put((cast(Callable[[FifoEvent], Awaitable[None]], on_failure), event))
-        else:
+        elif last_stage:
             await self._queue.put((on_success, event))
 
         return None

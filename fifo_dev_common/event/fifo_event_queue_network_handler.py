@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
-from typing import Awaitable, Callable, Dict, Sequence, TypeAlias
+from typing import Awaitable, Callable, Dict, Sequence, TypeAlias, cast
 from uuid import UUID
 
 from fifo_dev_common.event.fifo_event import (
@@ -10,6 +10,7 @@ from fifo_dev_common.event.fifo_event import (
     FifoEventResultWithCID,
     FifoEventShutdown,
     FifoEventWithCID,
+    EErrorCode,
 )
 from fifo_dev_common.logging.logger import get_logger
 
@@ -42,25 +43,52 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
     """
     Base class for asynchronous network event handlers.
 
-    A handler examines each incoming event and returns `True` when the event has
-    been consumed and should not be placed into the caller's queue. Returning
-    `False` allows the event to fall through to the queue for further processing
-    by the application.
+    Handlers can intercept and process events in both directions:
+    - Incoming events (from network before enqueuing): return the event (possibly modified) to add
+      to the outgoing queue, or None to suppress.
+    - Outgoing events (before sending to network): return the event (possibly modified) to send, or
+      None to suppress sending.
+
+    Subclasses must implement process_incoming_event() and process_outgoing_event().
+
+    Note:
+        FifoEventShutdown is always propagated. Handlers can observe it via both
+        process_incoming_event() and process_outgoing_event(), but their return values
+        are ignored. The original shutdown event is always enqueued or sent exactly once.
     """
 
     @abstractmethod
-    async def process_event(self, event: FifoEvent) -> bool:
+    async def process_incoming_event(self, event: FifoEvent) -> FifoEvent | None:
         """
-        Process an incoming event.
+        Process an incoming event before it is enqueued.
+
+        Called when an event is received from the network and before it is added to the 
+        outgoing queue.
 
         Args:
             event (FifoEvent):
                 Incoming event from the network.
 
         Returns:
-            bool:
-                `True` if the event was handled by the handler and should not
-                be queued for application consumption, otherwise `False`.
+            FifoEvent | None:
+                The event to enqueue (possibly modified), or None to suppress enqueuing.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def process_outgoing_event(self, event: FifoEvent) -> FifoEvent | None:
+        """
+        Process an outgoing event before it is sent over the network.
+
+        Called when an event is about to be sent over the network.
+
+        Args:
+            event (FifoEvent):
+                Outgoing event to be sent over the network.
+
+        Returns:
+            FifoEvent | None:
+                The event to send (possibly modified), or None to suppress sending.
         """
         raise NotImplementedError
 

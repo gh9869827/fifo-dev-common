@@ -334,15 +334,24 @@ class _FifoEventQueueNetworkAsyncMixin:
 
     async def _network_to_queue(self):
         """
-        Background task that continuously receives events from the network and queues them.
+        Background task that continuously receives events from the network and enqueues them.
 
         This method runs in a background asyncio task and continuously deserializes events
-        from the network stream, placing them into the output queue. It terminates when
+        from the network stream. If a handler is configured, incoming events are processed
+        through the handler's process_incoming_event() method, which may modify or suppress
+        them. Only non-None events are placed into the output queue. The task terminates when
         a FifoEventShutdown event is received.
+
+        Note:
+            When a FifoEventShutdown is received, process_incoming_event() is still invoked so the
+            handler can observe it, but its return value is ignored. The original shutdown event is
+            always enqueued exactly once.
+
+        Handler errors are logged; the failing event is discarded (except shutdown, which still
+        propagates).
 
         Raises:
             ConnectionError: If the network connection is lost during operation.
-            ValueError: If an invalid event is received and cannot be deserialized.
         """
         while True:
             try:
@@ -352,11 +361,23 @@ class _FifoEventQueueNetworkAsyncMixin:
                 logger.error("[%s] Error receiving event: %r", role, type(e))
                 continue
 
-            processed = False
             if self._handler is not None:
-                processed = await self._handler.process_event(event)
-            if not processed:
-                await self._out_queue.put(event)
+                try:
+                    event_to_enqueue = await self._handler.process_incoming_event(event)
+                except Exception: # pylint: disable=broad-exception-caught
+                    # Broad exception to catch handler errors so a faulty callback can't break the
+                    # receive background pipeline.
+                    role = "client" if "Client" in type(self).__name__ else "server"
+                    logger.error("[%s] process_incoming_event handler failed. Discarding event.",
+                                 role)
+                    event_to_enqueue = None
+
+                if not isinstance(event, FifoEventShutdown):
+                    if event_to_enqueue is None:
+                        continue
+                    event = event_to_enqueue
+
+            await self._out_queue.put(event)
             if isinstance(event, FifoEventShutdown):
                 break
 
@@ -364,16 +385,40 @@ class _FifoEventQueueNetworkAsyncMixin:
         """
         Send a FifoEvent over the network connection.
 
-        This method immediately serializes and sends the provided event over the
-        network connection. The event is automatically flushed to ensure delivery.
+        This method processes the event through the handler's process_outgoing_event() method (if a
+        handler is configured), which may modify or suppress the event. If the handler returns a
+        non-None event, it is serialized and sent over the network connection. The event is
+        automatically flushed to ensure delivery.
+
+        Note:
+            When a FifoEventShutdown is sent, process_outgoing_event() is still invoked so the
+            handler can observe it, but its return value is ignored. The original shutdown event is
+            always sent instead of the return value.
+
+        Handler errors are logged; the failing event is discarded (except shutdown, which is still
+        sent).
 
         Args:
             event (FifoEvent):
                 The event to send over the network connection.
 
         Raises:
-            ConnectionError: If the connection is closed or there's a network error.
+            ConnectionError: If the connection is closed or a network error occurs.
         """
+        if self._handler is not None:
+            try:
+                event_to_send = await self._handler.process_outgoing_event(event)
+            except Exception: # pylint: disable=broad-exception-caught
+                # Broad exception to catch handler errors so a faulty callback can't break the send
+                # pipeline.
+                role = "client" if "Client" in type(self).__name__ else "server"
+                logger.error("[%s] process_outgoing_event handler failed. Discarding event.", role)
+                event_to_send = None
+
+            if not isinstance(event, FifoEventShutdown):
+                if event_to_send is None:
+                    return
+                event = event_to_send
         await event.serialize_to_socket_async(self._writer)  # drain handled by serializer
 
     async def put(self, item: FifoEvent) -> None:

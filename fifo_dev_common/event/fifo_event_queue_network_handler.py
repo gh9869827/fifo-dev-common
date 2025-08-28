@@ -98,41 +98,40 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
     Correlation ID-based event handler for managing request/response workflows.
 
     This handler matches events using correlation IDs and executes registered callbacks
-    when specific event sequences are received. It supports multi-stage event processing
-    where each stage can expect one or more event types.
+    when specific event sequences are received. It supports **template-based registration**:
+
+    - You register *event classes* exactly once along with the expected response stages and
+      success/failure callbacks (see `register_template`).
+    - Each time a matching *event instance* (with a correlation ID) is **sent**, the handler
+      automatically creates a per-CID registration based on the template.
+
+    This avoids per-request manual registration: define the contract once; instances are
+    auto-registered on send.
 
     Usage:
-        1. Create an event with a correlation ID using `FifoEventWithCID`
-        2. Register expected response event types and a callback using `register()`
-        3. Send the event
-        4. When matching events arrive, the callback is executed asynchronously
-        5. The callback can choose to continue or stop further processing for that correlation ID
+        1. Define a template for an outbound event class via `register_template()`
+        2. Send an instance of that class (must subclass `FifoEventWithCID`)
+        3. The handler auto-registers the instance's CID
+        4. Incoming events matching the stages trigger the appropriate callbacks
 
     Example:
         ```python
         handler = FifoEventQueueNetworkAsyncHandlerCID()
-        
-        # Send a request event
-        request = FifoEventLoadMap(correlation_id=uuid4(), map_name="level1")
-        
-        # Register callback for expected response stages
-        async def handle_response(event):
-            if isinstance(event, FifoEventLoadMapAck):
-                print("Load map request acknowledged")
-                return True  # Continue to next stage
-            elif isinstance(event, FifoEventLoadMapDoneSuccess):
-                print("Map loaded successfully")
-                return False  # Stop processing
-            elif isinstance(event, FifoEventLoadMapDoneFailure):
-                print(f"Map load failed: {event.error}")
-                return False  # Stop processing
-        
-        # Expect ACK, then either Success or Failure result
-        handler.register(request, 
-            [FifoEventLoadMapAck, [FifoEventLoadMapDoneSuccess, FifoEventLoadMapDoneFailure]], 
-            handle_response)
 
-        await client.send(request)
+        # 1) Define the contract once at startup
+        async def on_ok(ev: FifoEvent) -> None: ...
+        async def on_err(ev: FifoEventResultWithCID) -> None: ...
+
+        handler.register_template(
+            FifoEventLoadMap,
+            [FifoEventLoadMapAck, [FifoEventLoadMapDoneSuccess, FifoEventLoadMapDoneFailure]],
+            on_success=on_ok,
+            on_failure=on_err,
+        )
+
+        # 2) Later, send an instance -> auto-registered using its correlation_id
+        req = FifoEventLoadMap(correlation_id=uuid4(), map_name="level1")
+        await client.send(req)
         ```
 
     Thread Safety:
@@ -141,23 +140,44 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         blocking the network reader.
     """
 
+    _queue: asyncio.Queue[tuple[Callable[[FifoEvent], Awaitable[None]], FifoEvent]]
+
+    _task: asyncio.Task[None]
+
+    _registrations: Dict[
+        UUID,
+        tuple[
+            NormalizedExpected,
+            Callable[[FifoEvent], Awaitable[None]],
+            Callable[[FifoEventResultWithCID], Awaitable[None]],
+            int,
+        ],
+    ]
+
+    _templates: Dict[
+        type[FifoEventWithCID],
+        tuple[
+            NormalizedExpected,
+            Callable[[FifoEvent], Awaitable[None]],
+            Callable[[FifoEventResultWithCID], Awaitable[None]],
+        ],
+    ]
+
     def __init__(self) -> None:
         """
         Initialize the correlation ID handler and start the background task that
         dispatches callbacks.
         """
-        self._queue: asyncio.Queue[tuple[Callable[[FifoEvent], Awaitable[None]], FifoEvent]]
         self._queue = asyncio.Queue()
         self._task = asyncio.create_task(self._run())
-        self._registrations: Dict[
-            UUID,
-            tuple[
-                NormalizedExpected,
-                Callable[[FifoEventResultWithCID], Awaitable[bool]],
-                int,
-            ],
-        ]
+
+        # Per-CID active registrations created at send-time from templates.
+        #   cid -> (normalized_expected, on_success, on_failure, stage_index)
         self._registrations = {}
+
+        # Class-level templates registered once.
+        #   event_cls -> (normalized_expected, on_success, on_failure)
+        self._templates = {}
 
     async def _run(self) -> None:
         """
@@ -173,7 +193,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                 logger.error("handler callback failed")
             except Exception:  # pragma: no cover # pylint: disable=broad-exception-caught
                 # Fallback for any other unexpected exceptions
-                logger.exception("handler callback failed with unexpected exception")
+                logger.error("handler callback failed with unexpected exception")
 
     async def join(self) -> None:
         """
@@ -181,78 +201,150 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         """
         await self._task
 
-    def register(self,
-                 event: FifoEventWithCID,
-                 expected_cls: ExpectedEventClasses,
-                 callback: Callable[[FifoEventResultWithCID], Awaitable[bool]]) -> None:
-        """
-        Register a callback for an expected event with the same correlation ID.
+    # --- Registration API -------------------------------------------------
 
-        Args:
-            event (FifoEventWithCID):
-                The event that was sent and from which the correlation ID is taken.
-
-            expected_cls (ExpectedEventClasses):
-                Sequence of stages; each stage is either a single event class or a
-                sequence of event classes. Example: `[A, [B, C], D]`.
-
-            callback (Callable[[FifoEventResultWithCID], Awaitable[bool]]):
-                Asynchronous function to invoke when the matching event is received.
-                It returns `True` to continue to the next stage or `False` to stop
-                processing further events for this correlation ID.
-        """
-        cid = getattr(event, "correlation_id")
+    def _normalize_expected(self, expected_cls: ExpectedEventClasses) -> NormalizedExpected:
         seq: NormalizedExpected = []
         for stage in expected_cls:
             if isinstance(stage, type):
                 seq.append([stage])
             else:
                 seq.append([cls for cls in stage])
-        self._registrations[cid] = (seq, callback, 0)
+        return seq
 
-    async def process_event(self, event: FifoEvent) -> bool:
+    def register_template(
+        self,
+        event_cls: type[FifoEventWithCID],
+        expected_cls: ExpectedEventClasses,
+        on_success: Callable[[FifoEvent], Awaitable[None]],
+        on_failure: Callable[[FifoEventResultWithCID], Awaitable[None]],
+    ) -> None:
         """
-        Process an incoming event.
+        Register callbacks and expected stages for an *outbound event class*.
 
-        If a registration for the event's correlation ID exists and the event
-        matches the next expected class, the associated callback is scheduled on
-        the background task and `True` is returned. Otherwise `False` is
-        returned so the caller may queue the event for further processing. A
-        `FifoEventShutdown` causes the background task to terminate.
+        Templates are applied automatically when instances of `event_cls` are sent via
+        `process_outgoing_event` (i.e., on the send path). Each instance must carry a
+        `correlation_id`; a per-CID registration is created at send-time.
 
         Args:
-            event (FifoEvent):
-                Incoming event from the network.
+            event_cls (type[FifoEventWithCID]):
+                The outbound event class to register a template for. When instances of this
+                class (or its subclasses) are sent, the template will be applied automatically.
 
+            expected_cls (ExpectedEventClasses):
+                Sequence of expected response stages. Each stage can be either a single event
+                class or a sequence of event classes (any of which can satisfy that stage).
+                Example: [FifoEventAck, [FifoEventSuccess, FifoEventFailure]]
+
+            on_success (Callable[[FifoEvent], Awaitable[None]]):
+                Callback invoked when an event is successfully processed. Called for:
+                - Non-final stages with successful events (FifoEventResultWithCID with OK code
+                  or non-result events)
+                - Final stage with successful events
+
+            on_failure (Callable[[FifoEventResultWithCID], Awaitable[None]]):
+                Callback invoked when a failure occurs. Called for any stage when a
+                FifoEventResultWithCID is received with a non-OK error code.
+        """
+        self._templates[event_cls] = (
+            self._normalize_expected(expected_cls), on_success, on_failure
+        )
+
+    # --- Pipeline hooks ---------------------------------------------------
+
+    async def process_incoming_event(self, event: FifoEvent) -> FifoEvent | None:
+        """
+        Process an incoming event applying success/failure stage rules.
+
+        Rules:
+            - A stage advances only if its matching event is classified as success.
+            - On failure (intermediate stage), invoke failure callback, stop (do not advance) and
+              remove the registration.
+            - On the final stage, always invoke the corresponding callback (success or failure)
+              and then remove the registration.
+        
         Returns:
-            bool: `True` if the event was handled by this handler, otherwise `False`.
+            FifoEvent | None:
+                If an event was not consumed to advance the stages or to invoke a callback, the
+                event itself is returned; otherwise None is returned.
         """
         if isinstance(event, FifoEventShutdown):
             await self._queue.put((_async_noop, event))
-            return False
+            return event
 
         cid = getattr(event, "correlation_id", None)
         if cid is None:
-            return False
+            return event
 
         registration = self._registrations.get(cid)
         if registration is None:
-            return False
+            return event
 
-        seq, callback, idx = registration
+        seq, on_success, on_failure, idx = registration
         expected = seq[idx]
         if not any(isinstance(event, cls) for cls in expected):
-            return False
+            return event
 
-        async def _wrapper(ev: FifoEvent) -> None:
-            cont = await callback(ev)  # type: ignore[arg-type]
-            if not cont:
-                self._registrations.pop(cid, None)
+        last_stage = idx == len(seq) - 1
+        is_failure = False
+        if isinstance(event, FifoEventResultWithCID):
+            if event.code != EErrorCode.OK:
+                is_failure = True
 
-        if idx + 1 < len(seq):
-            self._registrations[cid] = (seq, callback, idx + 1)
+        if not last_stage and not is_failure:
+            self._registrations[cid] = (seq, on_success, on_failure, idx + 1)
         else:
             self._registrations.pop(cid, None)
 
-        await self._queue.put((_wrapper, event))
-        return True
+        if is_failure:
+            await self._queue.put((cast(Callable[[FifoEvent], Awaitable[None]], on_failure), event))
+        else:
+            await self._queue.put((on_success, event))
+
+        return None
+
+    async def process_outgoing_event(self, event: FifoEvent) -> FifoEvent | None:
+        """
+        Auto-register per-CID tracking for matching templates; otherwise pass through.
+
+        If `event` is an instance of a registered template class and has a `correlation_id`,
+        a new per-CID registration is created from the template. If a registration already exists
+        for the same CID, it is left unchanged.
+
+        Args:
+            event (FifoEvent):
+                Outgoing event to be sent over the network.
+
+        Returns:
+            FifoEvent | None:
+                The input event is always returned as is.
+        """
+        if isinstance(event, FifoEventShutdown):
+            return event
+
+        # Only work with CID-capable events
+        if not isinstance(event, FifoEventWithCID):
+            return event
+
+        # Find a template for this event class (supporting inheritance chains)
+        template: tuple[NormalizedExpected,
+                        Callable[[FifoEvent], Awaitable[None]],
+                        Callable[[FifoEventResultWithCID], Awaitable[None]]] | None = None
+        for cls in type(event).mro():  # search MRO for a registered base class
+            if cls in self._templates:
+                template = self._templates[cls]
+                break
+
+        if template is None:
+            return event
+
+        cid: UUID | None = getattr(event, "correlation_id", None)
+        if cid is None:
+            return event
+
+        if cid not in self._registrations:
+            expected, on_success, on_failure = template
+            # Fresh stage index 0 for this new request instance
+            self._registrations[cid] = (expected, on_success, on_failure, 0)
+
+        return event

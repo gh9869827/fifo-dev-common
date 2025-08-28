@@ -44,8 +44,6 @@ def ensure_fifo_event_cid_registered():
         FifoEvent.register(DummyCID)
     if DummyAck.event_id not in FifoEvent._registry:
         FifoEvent.register(DummyAck)
-    if DummyAckFail.event_id not in FifoEvent._registry:
-        FifoEvent.register(DummyAckFail)
     if DummyDoneSuccess.event_id not in FifoEvent._registry:
         FifoEvent.register(DummyDoneSuccess)
     if DummyDoneFailure.event_id not in FifoEvent._registry:
@@ -84,23 +82,6 @@ class DummyCID(FifoEventWithCID):
 class DummyAck(FifoEventResultWithCID):
     """Acknowledgement event with correlation ID."""
     event_id: ClassVar[int] = 5002
-
-    def __init__(self,
-                 code: EErrorCode,
-                 correlation_id: UUID,
-                 message: str | None = None,
-                 priority: int = -1):
-        super().__init__(
-            code=code, correlation_id=correlation_id, priority=priority, message=message
-        )
-
-
-@FifoEvent.register
-@serializable
-@dataclass(kw_only=True)
-class DummyAckFail(FifoEventResultWithCID):
-    """Negative acknowledgement with correlation ID."""
-    event_id: ClassVar[int] = 5003
 
     def __init__(self,
                  code: EErrorCode,
@@ -233,16 +214,18 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
     client = await FifoEventQueueNetworkAsyncClient.connect(host, port, handler=handler)
     server = await server_task
 
-    received: asyncio.Future[FifoEventResultWithCID] = asyncio.Future()
+    received: asyncio.Future[FifoEvent] = asyncio.Future()
+
+    async def on_success(ev: FifoEvent) -> None:
+        received.set_result(ev)
+
+    async def on_failure(ev: FifoEventResultWithCID) -> None:
+        received.set_result(ev)
+
+    # Register template for DummyCID events
+    handler.register_template(DummyCID, [DummyAck], on_success, on_failure)
 
     req = DummyCID(value=5)
-
-    async def _cb(ev: FifoEventResultWithCID) -> bool:
-        received.set_result(ev)
-        return True
-
-    handler.register(req, [DummyAck], _cb)
-
     await client.send(req)
     srv_req = await server._out_queue.get()
     assert isinstance(srv_req, FifoEventWithCID)
@@ -277,21 +260,25 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
     ack_event = asyncio.Event()
     done_event = asyncio.Event()
 
-    req = DummyCID(value=6)
-
-    async def _cb(ev: FifoEventResultWithCID) -> bool:
+    async def on_success(ev: FifoEvent) -> None:
         if isinstance(ev, DummyAck):
             ack_event.set()
-            return True
-        done_event.set()
-        return False
+        else:  # DummyDoneSuccess
+            done_event.set()
 
-    handler.register(
-        req,
-        [[DummyAck], [DummyDoneSuccess, DummyDoneFailure]],
-        _cb,
+    async def on_failure(_ev: FifoEventResultWithCID) -> None:
+        # Should not be called in this test
+        pass
+
+    # Register template for DummyCID events with two-stage response
+    handler.register_template(
+        DummyCID,
+        [DummyAck, [DummyDoneSuccess, DummyDoneFailure]],
+        on_success,
+        on_failure
     )
 
+    req = DummyCID(value=6)
     await client.send(req)
     srv_req = await server._out_queue.get()
     assert isinstance(srv_req, FifoEventWithCID)
@@ -323,31 +310,34 @@ async def test_cid_handler_chain_stops_on_failure(unused_tcp_port: int):
     client = await FifoEventQueueNetworkAsyncClient.connect(host, port, handler=handler)
     server = await server_task
 
-    ack_event = asyncio.Event()
+    failure_event = asyncio.Event()
 
-    req = DummyCID(value=7)
+    async def on_success(_ev: FifoEvent) -> None:
+        # Should not be called in this test
+        pass
 
-    async def _cb(ev: FifoEventResultWithCID) -> bool:
-        if isinstance(ev, DummyAck):
-            ack_event.set()
-            return True
-        if isinstance(ev, DummyAckFail):
-            ack_event.set()
-            return False
-        return False
+    async def on_failure(_ev: FifoEventResultWithCID) -> None:
+        failure_event.set()
 
-    handler.register(
-        req,
-        [[DummyAck, DummyAckFail], [DummyDoneSuccess, DummyDoneFailure]],
-        _cb,
+    # Register template for DummyCID events
+    handler.register_template(
+        DummyCID,
+        [DummyAck, [DummyDoneSuccess, DummyDoneFailure]],
+        on_success,
+        on_failure
     )
 
+    req = DummyCID(value=7)
     await client.send(req)
     srv_req = await server._out_queue.get()
     assert isinstance(srv_req, FifoEventWithCID)
-    await server.send(DummyAckFail(code=EErrorCode.ERROR, correlation_id=srv_req.correlation_id))
-    await asyncio.wait_for(ack_event.wait(), 1.0)
 
+    # Send a failure ACK - this should trigger on_failure and stop the chain
+    await server.send(DummyAck(code=EErrorCode.ERROR, correlation_id=srv_req.correlation_id))
+    await asyncio.wait_for(failure_event.wait(), 1.0)
+
+    # Send a subsequent success event - this should go to the client queue since the
+    # handler chain stopped
     await server.send(DummyDoneSuccess(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
     recv = await asyncio.wait_for(client._out_queue.get(), 1.0)
     assert isinstance(recv, DummyDoneSuccess)

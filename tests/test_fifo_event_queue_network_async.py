@@ -216,10 +216,10 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
 
     received: asyncio.Future[FifoEvent] = asyncio.Future()
 
-    async def on_success(ev: FifoEvent) -> None:
+    async def on_success(ev: FifoEvent, _source_ev: FifoEvent) -> None:
         received.set_result(ev)
 
-    async def on_failure(ev: FifoEventResultWithCID) -> None:
+    async def on_failure(ev: FifoEventResultWithCID, _source_ev: FifoEvent) -> None:
         received.set_result(ev)
 
     # Register template for DummyCID events
@@ -244,6 +244,107 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
 
 
 @pytest.mark.asyncio
+async def test_cid_handler_on_send_callback_invoked(unused_tcp_port: int):
+    host = "127.0.0.1"
+    port = unused_tcp_port
+
+    server_task = asyncio.create_task(
+        FifoEventQueueNetworkAsyncServer.accept(host, port)
+    )
+    await asyncio.sleep(0.01)
+
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    client = await FifoEventQueueNetworkAsyncClient.connect(host, port, handler=handler)
+    server = await server_task
+
+    send_called = asyncio.Event()
+    seen: list[FifoEvent] = []
+
+    async def on_send(ev: FifoEvent) -> None:
+        seen.append(ev)
+        send_called.set()
+
+    async def on_success(_ev: FifoEvent, _src: FifoEvent) -> None:
+        # Not used in this test
+        pass
+
+    async def on_failure(_ev: FifoEventResultWithCID, _src: FifoEvent) -> None:
+        # Not used in this test
+        pass
+
+    # Register template with on_send callback
+    handler.register_template(
+        DummyCID,
+        [DummyAck],
+        on_success,
+        on_failure,
+        on_send=on_send,
+    )
+
+    req = DummyCID(value=42)
+    await client.send(req)
+
+    # Ensure the event is sent over the wire
+    srv_req = await asyncio.wait_for(server._out_queue.get(), 1.0)
+    assert isinstance(srv_req, FifoEventWithCID)
+
+    # Verify on_send callback was invoked with the same event instance
+    await asyncio.wait_for(send_called.wait(), 1.0)
+    assert seen and seen[0] is req
+
+    await client.stop()
+    await server.stop()
+    assert isinstance(await server._out_queue.get(), FifoEventShutdown)
+    assert isinstance(await client._out_queue.get(), FifoEventShutdown)
+    await asyncio.gather(client.join(), server.join())
+    await handler.join()
+
+
+@pytest.mark.asyncio
+async def test_handler_logs_on_callback_failure(caplog: pytest.LogCaptureFixture):
+    import logging
+
+    # Capture error logs from the handler module
+    caplog.set_level(logging.ERROR, logger="fifo_dev_common.event.fifo_event_queue_network_handler")
+
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+
+    async def on_success(_ev: FifoEvent, _src: FifoEvent) -> None:
+        # Not exercised in this test
+        pass
+
+    async def on_failure(_ev: FifoEventResultWithCID, _src: FifoEvent) -> None:
+        # Not exercised in this test
+        pass
+
+    async def on_send_raises(_ev: FifoEvent) -> None:
+        # Raise a whitelisted exception to trigger the error log path
+        raise TypeError("boom")
+
+    # Register a template with an on_send callback that raises
+    handler.register_template(
+        DummyCID,
+        [DummyAck],
+        on_success,
+        on_failure,
+        on_send=on_send_raises,
+    )
+
+    # Trigger the on_send path without needing a network connection
+    await handler.process_outgoing_event(DummyCID(value=1))
+
+    # Give the handler loop a moment to process the queued callback
+    await asyncio.sleep(0.02)
+
+    # Shut down the handler loop cleanly
+    await handler.process_incoming_event(FifoEventShutdown())
+    await handler.join()
+
+    # Validate that the failure was logged as expected
+    assert any("handler callback failed" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
     host = "127.0.0.1"
     port = unused_tcp_port
@@ -260,13 +361,13 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
     ack_event = asyncio.Event()
     done_event = asyncio.Event()
 
-    async def on_success(ev: FifoEvent) -> None:
+    async def on_success(ev: FifoEvent, _source_ev: FifoEvent) -> None:
         if isinstance(ev, DummyAck):
             ack_event.set()
         else:  # DummyDoneSuccess
             done_event.set()
 
-    async def on_failure(_ev: FifoEventResultWithCID) -> None:
+    async def on_failure(_ev: FifoEventResultWithCID, _source_ev: FifoEvent) -> None:
         # Should not be called in this test
         pass
 
@@ -313,11 +414,11 @@ async def test_cid_handler_chain_stops_on_failure(unused_tcp_port: int):
 
     failure_event = asyncio.Event()
 
-    async def on_success(_ev: FifoEvent) -> None:
+    async def on_success(_ev: FifoEvent, _source_ev: FifoEvent) -> None:
         # Should not be called in this test
         pass
 
-    async def on_failure(_ev: FifoEventResultWithCID) -> None:
+    async def on_failure(_ev: FifoEventResultWithCID, _source_ev: FifoEvent) -> None:
         failure_event.set()
 
     # Register template for DummyCID events

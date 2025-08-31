@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "pytest",
+  "pytest-cov",
   "pytest-asyncio",
   "trustme",           #  for generating self‑signed TLS certificates during tests
 ]
@@ -22,3 +23,14 @@ dev = [
 [build-system]
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+addopts = "--cov=fifo_dev_common"
+
+[tool.coverage.run]
+branch = true
+concurrency = ["multiprocessing"]
+source = ["fifo_dev_common"]
+
+[tool.coverage.report]
+omit = ["tests/*"]

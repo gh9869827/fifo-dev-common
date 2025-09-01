@@ -114,7 +114,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         handler = FifoEventQueueNetworkAsyncHandlerCID()
 
         # 1) Define the contract once at startup
-        async def on_ok(ev: FifoEvent) -> None: ...
+        async def on_ok(ev: FifoEventWithCID | FifoEventResultWithCID) -> None: ...
         async def on_err(ev: FifoEventResultWithCID) -> None: ...
 
         handler.register_template(
@@ -151,12 +151,12 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
 
     # Payloads are uniform tuples; first element is the callback, followed by args.
     QueuePayloadSend: TypeAlias = tuple[
-        Callable[[FifoEvent], Awaitable[None]],
-        FifoEvent,
+        Callable[[FifoEventWithCID], Awaitable[None]],
+        FifoEventWithCID,
     ]
     QueuePayloadSuccess: TypeAlias = tuple[
-        Callable[[FifoEvent, FifoEventWithCID], Awaitable[None]],
-        FifoEvent,
+        Callable[[FifoEventWithCID | FifoEventResultWithCID, FifoEventWithCID], Awaitable[None]],
+        FifoEventWithCID | FifoEventResultWithCID,
         FifoEventWithCID,
     ]
     QueuePayloadFailure: TypeAlias = tuple[
@@ -179,7 +179,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         UUID,
         tuple[
             NormalizedExpected,
-            Callable[[FifoEvent, FifoEventWithCID], Awaitable[None]],
+            Callable[[FifoEventWithCID|FifoEventResultWithCID, FifoEventWithCID], Awaitable[None]],
             Callable[[FifoEventResultWithCID, FifoEventWithCID], Awaitable[None]],
             int,
             FifoEventWithCID,
@@ -190,9 +190,9 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         type[FifoEventWithCID],
         tuple[
             NormalizedExpected,
-            Callable[[FifoEvent, FifoEventWithCID], Awaitable[None]],
+            Callable[[FifoEventWithCID|FifoEventResultWithCID, FifoEventWithCID], Awaitable[None]],
             Callable[[FifoEventResultWithCID, FifoEventWithCID], Awaitable[None]],
-            Callable[[FifoEvent], Awaitable[None]] | None,
+            Callable[[FifoEventWithCID], Awaitable[None]] | None,
         ],
     ]
 
@@ -265,10 +265,12 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         self,
         event_cls: type[FifoEventWithCID],
         expected_cls: ExpectedEventClasses,
-        on_success: Callable[[FifoEvent, FifoEventWithCID], Awaitable[None]],
-        on_failure: Callable[[FifoEventResultWithCID, FifoEventWithCID], Awaitable[None]],
+        on_success: Callable[[FifoEventWithCID | FifoEventResultWithCID, FifoEventWithCID],
+                             Awaitable[None]],
+        on_failure: Callable[[FifoEventResultWithCID, FifoEventWithCID],
+                             Awaitable[None]],
         *,
-        on_send: Callable[[FifoEvent], Awaitable[None]] | None = None,
+        on_send: Callable[[FifoEventWithCID], Awaitable[None]] | None = None,
     ) -> None:
         """
         Register callbacks and expected stages for an *outbound event class*.
@@ -287,7 +289,8 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                 class or a sequence of event classes (any of which can satisfy that stage).
                 Example: [FifoEventAck, [FifoEventSuccess, FifoEventFailure]]
 
-            on_success (Callable[[FifoEvent, FifoEventWithCID], Awaitable[None]]):
+            on_success (Callable[[FifoEventWithCID | FifoEventResultWithCID, FifoEventWithCID],
+                                 Awaitable[None]]):
                 Callback invoked when an event is successfully processed. Receives the
                 incoming event and the original request event. Called for:
                 - Non-final stages with successful events (FifoEventResultWithCID with OK code
@@ -299,7 +302,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                 original request event. Called for any stage when a
                 FifoEventResultWithCID is received with a non-OK error code.
 
-            on_send (Callable[[FifoEvent], Awaitable[None]] | None, optional):
+            on_send (Callable[[FifoEventWithCID], Awaitable[None]] | None, optional):
                 If provided, invoked when an instance of `event_cls` (or its subclass) is about to
                 be sent over the network. If None, no callback is scheduled. The event instance is
                 passed to the callback.
@@ -331,6 +334,9 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         """
         if isinstance(event, FifoEventShutdown):
             await self._queue.put((self.QueueItemKind.SHUTDOWN, ()))
+            return event
+
+        if not isinstance(event, (FifoEventWithCID, FifoEventResultWithCID)):
             return event
 
         cid = getattr(event, "correlation_id", None)
@@ -407,9 +413,10 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
 
         # Find a template for this event class (supporting inheritance chains)
         template: tuple[NormalizedExpected,
-                        Callable[[FifoEvent, FifoEventWithCID], Awaitable[None]],
+                        Callable[[FifoEventWithCID | FifoEventResultWithCID, FifoEventWithCID],
+                                 Awaitable[None]],
                         Callable[[FifoEventResultWithCID, FifoEventWithCID], Awaitable[None]],
-                        Callable[[FifoEvent], Awaitable[None]] | None] | None = None
+                        Callable[[FifoEventWithCID], Awaitable[None]] | None] | None = None
         for cls in type(event).mro():  # search MRO for a registered base class
             if cls in self._templates:
                 template = self._templates[cls]

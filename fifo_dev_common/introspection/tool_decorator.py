@@ -65,7 +65,7 @@ class ToolQuerySource(Protocol):
 
 _ALLOWED_PREFIXES = ("Returns", "Provides", "Gets", "Fetches", "Supplies")
 
-def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySource]:
+def tool_query_source(name: str) -> Callable[[Callable[..., str]], ToolQuerySource]:
     """
     Decorator to annotate a callable tool query source with a MiniDocString and a logical tool name.
 
@@ -75,7 +75,7 @@ def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySo
       - `get_description()`: a method that returns the tool's human-readable description
 
     The decorated function must:
-      - Have no parameters
+      - Have no parameters or be an instance method receiving `self`
       - Return a `str`
 
     Args:
@@ -87,7 +87,7 @@ def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySo
         Callable: The original function, enriched with `.source_name` and `.source_docstring`
         attributes, and recognized as conforming to the ToolQuerySource protocol.
     """
-    def decorator(fn: Callable[[Any], str]) -> ToolQuerySource:
+    def decorator(fn: Callable[..., str]) -> ToolQuerySource:
         tool = cast(ToolQuerySource, fn)
 
         # Attach metadata
@@ -128,8 +128,10 @@ def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySo
 
         setattr(tool, "get_description", get_description)
 
-        if tool.source_docstring.args:
-            raise RuntimeError(f"Source {name} has unexpected arguments.")
+        # Allow a single positional argument named 'self' for instance methods.
+        if args := tool.source_docstring.args:
+            if not (len(args) == 1 and args[0].name == "self"):
+                raise RuntimeError(f"Source {name} has unexpected arguments.")
 
         if tool.source_docstring.return_type is None:
             raise RuntimeError(f"Source {name} must return a string (str), not None.")

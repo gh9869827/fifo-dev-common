@@ -65,7 +65,7 @@ class ToolQuerySource(Protocol):
 
 _ALLOWED_PREFIXES = ("Returns", "Provides", "Gets", "Fetches", "Supplies")
 
-def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySource]:
+def tool_query_source(name: str) -> Callable[[Callable[..., str]], ToolQuerySource]:
     """
     Decorator to annotate a callable tool query source with a MiniDocStringFunction and a logical
     tool name.
@@ -76,7 +76,7 @@ def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySo
       - `get_description()`: a method that returns the tool's human-readable description
 
     The decorated function must:
-      - Have no parameters
+      - Have no parameters or be an instance method receiving `self`
       - Return a `str`
 
     Args:
@@ -88,7 +88,7 @@ def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySo
         Callable: The original function, enriched with `.source_name` and `.source_docstring`
         attributes, and recognized as conforming to the ToolQuerySource protocol.
     """
-    def decorator(fn: Callable[[Any], str]) -> ToolQuerySource:
+    def decorator(fn: Callable[..., str]) -> ToolQuerySource:
         tool = cast(ToolQuerySource, fn)
 
         # Attach metadata
@@ -100,10 +100,17 @@ def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySo
                 r"^(Returns|Provides|Gets|Fetches|Supplies)\s+(.*)", summary, flags=re.IGNORECASE
             )
             if not match:
+                # Show only a short snippet of the invalid summary to keep the exception
+                # message concise and avoid printing a long docstring verbatim.
+                # We truncate the representation to at most 10 characters (adding an ellipsis
+                # when truncated).
+                display = summary[:10]
+                if len(summary) > 10:
+                    display += "…"
                 raise ValueError(
                     f"Source '{name}' summary must start with one of: "
                     f"{', '.join(_ALLOWED_PREFIXES)}.\n"
-                    f"Got: {summary!r}"
+                    f"Got: {display!r}"
                 )
             rest = match.group(2)
             return rest[0].upper() + rest[1:]
@@ -122,8 +129,10 @@ def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySo
 
         setattr(tool, "get_description", get_description)
 
-        if tool.source_docstring.args:
-            raise RuntimeError(f"Source {name} has unexpected arguments.")
+        # Allow a single positional argument named 'self' for instance methods.
+        if args := tool.source_docstring.args:
+            if not (len(args) == 1 and args[0].name == "self"):
+                raise RuntimeError(f"Source {name} has unexpected arguments.")
 
         if tool.source_docstring.return_type is None:
             raise RuntimeError(f"Source {name} must return a string (str), not None.")

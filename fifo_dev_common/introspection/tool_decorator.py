@@ -99,10 +99,17 @@ def tool_query_source(name: str) -> Callable[[Callable[[Any], str]], ToolQuerySo
                 r"^(Returns|Provides|Gets|Fetches|Supplies)\s+(.*)", summary, flags=re.IGNORECASE
             )
             if not match:
+                # Show only a short snippet of the invalid summary to keep the exception
+                # message concise and avoid printing a long docstring verbatim.
+                # We truncate the representation to at most 10 characters (adding an ellipsis
+                # when truncated).
+                display = summary[:10]
+                if len(summary) > 10:
+                    display += "…"
                 raise ValueError(
                     f"Source '{name}' summary must start with one of: "
                     f"{', '.join(_ALLOWED_PREFIXES)}.\n"
-                    f"Got: {summary!r}"
+                    f"Got: {display!r}"
                 )
             rest = match.group(2)
             return rest[0].upper() + rest[1:]

@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import asyncio
+from uuid import UUID
+from typing import NamedTuple
+
+from fifo_dev_common.event.fifo_event import (
+    FifoEvent,
+    FifoEventWithCID,
+    FifoEventResultWithCID,
+)
+from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut
+from fifo_dev_common.event.fifo_event_queue_network_handler import (
+    FifoEventQueueNetworkAsyncHandlerCID,
+    ExpectedEventClasses,
+)
+
+
+class CIDOutcome(NamedTuple):
+    """
+    Result of a CID request chain.
+
+    - ok: True on final success, False on any failure stage
+    - event: The final event instance (success or failure)
+    """
+    ok: bool
+    event: FifoEvent
+
+
+class FifoEventCIDRequestManager:
+    """
+    Helper to coordinate request/response flows for CID-capable events.
+
+    This class centralizes the boilerplate of tracking a per-request Future and wiring
+    success/failure callbacks. It works with `FifoEventQueueNetworkAsyncHandlerCID` templates
+    and provides a simple `send_and_wait()` helper used by higher-level APIs.
+
+    Typical usage:
+        manager = FifoEventCIDRequestManager(loop, handler)
+
+        # Register expected response chains once per outbound request class
+        manager.register(MyRequest, [MyAck, [MyDoneSuccess, MyDoneFailure]])
+
+        # In your API method(s):
+        req = MyRequest(...)
+        result = await manager.send_and_wait(client, req, timeout=5.0)
+    """
+
+    _loop: asyncio.AbstractEventLoop
+    _handler: FifoEventQueueNetworkAsyncHandlerCID
+    _futures: dict[UUID, asyncio.Future[CIDOutcome]]
+
+    def __init__(self,
+                 loop: asyncio.AbstractEventLoop,
+                 handler: FifoEventQueueNetworkAsyncHandlerCID) -> None:
+        """
+        Initialize a CID request manager bound to an event handler and loop.
+
+        Args:
+            loop (asyncio.AbstractEventLoop):
+                The asyncio event loop used to create and manage internal Futures.
+
+            handler (FifoEventQueueNetworkAsyncHandlerCID):
+                The correlation-ID aware handler used to register request/response templates
+                and to receive success/failure callbacks that resolve per-request Futures.
+        """
+        self._loop = loop
+        self._handler = handler
+        self._futures = {}
+
+    def register(self,
+                 event_cls: type[FifoEventWithCID],
+                 expected: ExpectedEventClasses) -> None:
+        """
+        Register the expected response chain for an outbound CID-capable request class.
+
+        This wires `on_success` and `on_failure` callbacks into the underlying handler to
+        resolve and clean up a per-CID Future representing the final outcome of the request.
+        An `on_sent` callback is not required for this flow.
+
+        Args:
+            event_cls (type[FifoEventWithCID]):
+                The outbound request event class to track (e.g., `MyRequest`). Instances of this
+                class must carry a `correlation_id` and will be auto-matched on send.
+
+            expected (ExpectedEventClasses):
+                The expected response stages for this request class, expressed as a sequence of
+                event types or nested choices per stage. Example:
+                `[MyAck, [MyDoneSuccess, MyDoneFailure]]`.
+
+        Returns:
+            None
+        """
+
+        async def on_success(ev: FifoEventWithCID | FifoEventResultWithCID,
+                             src: FifoEventWithCID) -> None:
+            fut = self._futures.get(src.correlation_id)
+            if fut is not None and not fut.done():
+                fut.set_result(CIDOutcome(True, ev))
+            # Cleanup after setting result (idempotent with send_and_wait finally)
+            self._futures.pop(src.correlation_id, None)
+
+        async def on_failure(_ev: FifoEventResultWithCID,
+                             src: FifoEventWithCID) -> None:
+            fut = self._futures.get(src.correlation_id)
+            if fut is not None and not fut.done():
+                # Return the failing event with ok=False to preserve details
+                fut.set_result(CIDOutcome(False, _ev))
+            # Cleanup after setting result (idempotent with send_and_wait finally)
+            self._futures.pop(src.correlation_id, None)
+
+        self._handler.register_template(
+            event_cls,
+            expected,
+            on_success=on_success,
+            on_failure=on_failure,
+        )
+
+    async def send_and_wait(self,
+                            transport: SupportsFifoEventPut,
+                            req: FifoEventWithCID,
+                            *,
+                            timeout: float | None = None) -> CIDOutcome:
+        """
+        Send a CID-capable request and await the final result event.
+
+        - Creates a per-request Future keyed by the request's correlation ID
+        - Sends the request over `transport.put(req)`
+        - Resolves when the handler's registered callbacks deliver a final success/failure
+
+        Args:
+            transport (SupportsFifoEventPut):
+                Network client/server (or adapter) exposing an async `put(FifoEvent)` method.
+
+            req (FifoEventWithCID):
+                Outbound request event. Must carry a correlation_id (auto-assigned if None by
+                the event constructor).
+
+            timeout (float | None, optional):
+                Optional timeout in seconds for awaiting the final result. If None, waits
+                indefinitely.
+
+        Returns:
+            CIDOutcome:
+                Wraps success flag and the final event (success or failure).
+        """
+        fut: asyncio.Future[CIDOutcome] = self._loop.create_future()
+        self._futures[req.correlation_id] = fut
+
+        try:
+            await transport.put(req)
+        except Exception as e:  # pragma: no cover - transport failure path
+            # Ensure we clean up and propagate the error to the awaiting caller
+            self._futures.pop(req.correlation_id, None)
+            if not fut.done():
+                fut.set_exception(e)
+            raise
+
+        try:
+            return await (asyncio.wait_for(fut, timeout) if timeout is not None else fut)
+        finally:
+            # Safety: callbacks pop on completion; this is idempotent
+            self._futures.pop(req.correlation_id, None)
+
+
+__all__ = ["FifoEventCIDRequestManager", "CIDOutcome"]

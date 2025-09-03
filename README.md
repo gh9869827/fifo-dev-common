@@ -26,6 +26,7 @@ It provides the following for runtime type checks and casting, docstring parsing
 - `class FifoEvent`: Base class for binary-serializable events, with factory deserialization and class registration for cross-system use.
 - `class FifoEventQueueForwarderMpToAsync`: Bridges multiprocessing and asyncio event queues via a background thread.
 - `class FifoEventQueueNetworkAsyncClient` / `class FifoEventQueueNetworkAsyncServer`: Asyncio-based network communication for FifoEvent objects over TCP with optional TLS 1.3 encryption.
+- `class FifoEventCIDRequestManager` + `CIDOutcome`: Helper to orchestrate CID request/response chains using the network handler; provides `send_and_wait(...)` that returns a final outcome (ok + event) with minimal boilerplate.
 - `class FifoProcessManager`: Manager for running workers in separate OS processes with interprocess communication. Abstracts process creation, startup, and shutdown while bridging multiprocessing queues with asyncio. Supports both async and sync worker callbacks, with correlation ID tracking for request/response workflows.
 - `get_logger()`: Returns a logger instance with `.trace()` support for fine-grained debugging. Registers a custom TRACE level and logger class.
 - `class FifoRefreshableValue`: Lock-free cache for asynchronously refreshed values with explicit state transitions and immutable snapshots.

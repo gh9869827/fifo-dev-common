@@ -38,18 +38,27 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
     """
     Base class for asynchronous network event handlers.
 
-    Handlers can intercept and process events in both directions:
-    - Incoming events (from network before enqueuing): return the event (possibly modified) to add
-      to the outgoing queue, or None to suppress.
-    - Outgoing events (before sending to network): return the event (possibly modified) to send, or
-      None to suppress sending.
+    Handlers can intercept and process events in three phases:
 
-    Subclasses must implement process_incoming_event() and process_outgoing_event().
+    - Incoming events (from the network, before enqueuing):
+      Return the event (possibly modified) to enqueue, or None to suppress.
+
+    - Outgoing events (before sending to the network):
+      Return the event (possibly modified) to send, or None to suppress sending.
+
+    - Sent events (after the event has been successfully written and flushed):
+      Invoked with the event that was sent. This hook is for notification only
+      and must not return a value.
+
+    Subclasses must implement `process_incoming_event()`,
+    `process_outgoing_event()`, and `process_sent_event()`.
 
     Note:
-        FifoEventShutdown is always propagated. Handlers can observe it via both
-        process_incoming_event() and process_outgoing_event(), but their return values
-        are ignored. The original shutdown event is always enqueued or sent exactly once.
+        `FifoEventShutdown` is always propagated. Handlers can observe it via
+        `process_incoming_event()` and `process_outgoing_event()`, but their return
+        values are ignored. The original shutdown event is always enqueued or sent
+        exactly once. `process_sent_event()` is still invoked with the shutdown event
+        after it has been sent.
     """
 
     @abstractmethod
@@ -75,7 +84,7 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
         """
         Process an outgoing event before it is sent over the network.
 
-        Called when an event is about to be sent over the network.
+        Called when an event is about to be serialized and written to the network.
 
         Args:
             event (FifoEvent):
@@ -84,6 +93,21 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
         Returns:
             FifoEvent | None:
                 The event to send (possibly modified), or None to suppress sending.
+        """
+        raise NotImplementedError  # pragma: no cover
+
+    @abstractmethod
+    async def process_sent_event(self, event: FifoEvent) -> None:
+        """
+        Called after an outgoing event has been successfully sent over the network.
+
+        Implementations can perform post-send bookkeeping (logging, metrics,
+        triggering side-effects, etc.). This hook is for notification only and
+        must not return a value.
+
+        Args:
+            event (FifoEvent):
+                The event that was successfully sent.
         """
         raise NotImplementedError  # pragma: no cover
 
@@ -440,3 +464,6 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             self._registrations[cid] = (expected, on_success, on_failure, 0, event)
 
         return event
+
+    async def process_sent_event(self, event: FifoEvent) -> None:
+        pass

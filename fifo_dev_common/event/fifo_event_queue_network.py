@@ -390,6 +390,10 @@ class _FifoEventQueueNetworkAsyncMixin:
         non-None event, it is serialized and sent over the network connection. The event is
         automatically flushed to ensure delivery.
 
+        If the write completes without raising an exception, the handler's `process_sent_event()`
+        method is invoked (if configured). This callback is for notification purposes only; it has
+        no return value. It is invoked with the event that has been successfully sent.
+
         Note:
             When a FifoEventShutdown is sent, process_outgoing_event() is still invoked so the
             handler can observe it, but its return value is ignored. The original shutdown event is
@@ -419,7 +423,17 @@ class _FifoEventQueueNetworkAsyncMixin:
                 if event_to_send is None:
                     return
                 event = event_to_send
+
         await event.serialize_to_socket_async(self._writer)  # drain handled by serializer
+
+        if self._handler is not None:
+            try:
+                await self._handler.process_sent_event(event)
+            except Exception: # pylint: disable=broad-exception-caught
+                # Broad exception to catch handler errors so a faulty callback can't break the send
+                # pipeline.
+                role = "client" if "Client" in type(self).__name__ else "server"
+                logger.error("[%s] process_sent_event handler failed.", role)
 
     async def put(self, item: FifoEvent) -> None:
         """
@@ -472,7 +486,12 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
             and places them in the output queue.
 
         _handler (FifoEventQueueNetworkAsyncHandlerBase | None):
-            Optional handler used to process incoming events before queuing.
+            Handler used to intercept and process events. If None, events are
+            queued and sent directly without additional processing. When provided,
+            the handler can:
+            - process incoming events before they are enqueued,
+            - process outgoing events before they are sent, and
+            - observe sent events after they have been successfully sent.
     """
     _reader: asyncio.StreamReader
     _writer: asyncio.StreamWriter
@@ -500,8 +519,12 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
                 Optional priority queue for received events. If None, a new queue is created.
 
             handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
-                Handler used to process incoming events. If None, events are
-                queued directly without additional processing.
+                Handler used to intercept and process events. If None, events are
+                queued and sent directly without additional processing. When provided,
+                the handler can:
+                - process incoming events before they are enqueued,
+                - process outgoing events before they are sent, and
+                - observe sent events after they have been successfully sent.
         """
         self._reader = reader
         self._writer = writer
@@ -539,8 +562,12 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
                 Optional priority queue for received events. If None, a new queue is created.
 
             handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
-                Handler used to process incoming events. If None, events are
-                queued directly without additional processing.
+                Handler used to intercept and process events. If None, events are
+                queued and sent directly without additional processing. When provided,
+                the handler can:
+                - process incoming events before they are enqueued,
+                - process outgoing events before they are sent, and
+                - observe sent events after they have been successfully sent.
 
             ssl_ctx (ssl.SSLContext | None, optional):
                 SSL context configured for TLS 1.3. If provided, enables TLS.
@@ -672,7 +699,12 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
             and places them in the output queue.
 
         _handler (FifoEventQueueNetworkAsyncHandlerBase | None):
-            Optional handler used to process incoming events before queuing.
+            Handler used to intercept and process events. If None, events are
+            queued and sent directly without additional processing. When provided,
+            the handler can:
+            - process incoming events before they are enqueued,
+            - process outgoing events before they are sent, and
+            - observe sent events after they have been successfully sent.
     """
     _reader: asyncio.StreamReader
     _writer: asyncio.StreamWriter
@@ -704,8 +736,12 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
                 Optional priority queue for received events. If None, a new queue is created.
 
             handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
-                Handler used to process incoming events. If None, events are
-                queued directly without additional processing.
+                Handler used to intercept and process events. If None, events are
+                queued and sent directly without additional processing. When provided,
+                the handler can:
+                - process incoming events before they are enqueued,
+                - process outgoing events before they are sent, and
+                - observe sent events after they have been successfully sent.
         """
         self._reader = reader
         self._writer = writer
@@ -743,8 +779,12 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
                 Optional priority queue for received events. If None, a new queue is created.
 
             handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
-                Handler used to process incoming events. If None, events are
-                queued directly without additional processing.
+                Handler used to intercept and process events. If None, events are
+                queued and sent directly without additional processing. When provided,
+                the handler can:
+                - process incoming events before they are enqueued,
+                - process outgoing events before they are sent, and
+                - observe sent events after they have been successfully sent.
 
             ssl_ctx (ssl.SSLContext | None, optional):
                 SSL context configured for TLS 1.3. If provided, enables TLS for the server.

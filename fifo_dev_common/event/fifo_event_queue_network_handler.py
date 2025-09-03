@@ -164,17 +164,23 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         Kinds of items queued for the background callback dispatcher.
 
         - SEND: schedule the `on_send` callback for an outbound request event
+        - SENT: schedule the `on_sent` callback after an outbound request was sent
         - SUCCESS: schedule the success callback with the incoming event and original request
         - FAILURE: schedule the failure callback with the incoming event and original request
         - SHUTDOWN: signal the dispatcher loop to terminate
         """
         SEND = auto()
+        SENT = auto()
         SUCCESS = auto()
         FAILURE = auto()
         SHUTDOWN = auto()
 
     # Payloads are uniform tuples; first element is the callback, followed by args.
     QueuePayloadSend: TypeAlias = tuple[
+        Callable[[FifoEventWithCID], Awaitable[None]],
+        FifoEventWithCID,
+    ]
+    QueuePayloadSent: TypeAlias = tuple[
         Callable[[FifoEventWithCID], Awaitable[None]],
         FifoEventWithCID,
     ]
@@ -192,7 +198,11 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
 
     QueueItem: TypeAlias = tuple[
         QueueItemKind,
-        QueuePayloadSend | QueuePayloadSuccess | QueuePayloadFailure | QueuePayloadShutdown,
+        QueuePayloadSend |
+        QueuePayloadSent |
+        QueuePayloadSuccess |
+        QueuePayloadFailure |
+        QueuePayloadShutdown,
     ]
 
     _queue: asyncio.Queue[QueueItem]
@@ -217,6 +227,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             Callable[[FifoEventWithCID|FifoEventResultWithCID, FifoEventWithCID], Awaitable[None]],
             Callable[[FifoEventResultWithCID, FifoEventWithCID], Awaitable[None]],
             Callable[[FifoEventWithCID], Awaitable[None]] | None,
+            Callable[[FifoEventWithCID], Awaitable[None]] | None,
         ],
     ]
 
@@ -233,7 +244,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         self._registrations = {}
 
         # Class-level templates registered once.
-        #   event_cls -> (normalized_expected, on_success, on_failure, on_send)
+        #   event_cls -> (normalized_expected, on_success, on_failure, on_send, on_sent)
         self._templates = {}
 
     async def _run(self) -> None:
@@ -248,6 +259,11 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                 if kind is self.QueueItemKind.SEND:
                     cb, ev = cast(
                         FifoEventQueueNetworkAsyncHandlerCID.QueuePayloadSend, payload
+                    )
+                    await cb(ev)
+                elif kind is self.QueueItemKind.SENT:
+                    cb, ev = cast(
+                        FifoEventQueueNetworkAsyncHandlerCID.QueuePayloadSent, payload
                     )
                     await cb(ev)
                 elif kind is self.QueueItemKind.SUCCESS:
@@ -295,6 +311,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                              Awaitable[None]],
         *,
         on_send: Callable[[FifoEventWithCID], Awaitable[None]] | None = None,
+        on_sent: Callable[[FifoEventWithCID], Awaitable[None]] | None = None,
     ) -> None:
         """
         Register callbacks and expected stages for an *outbound event class*.
@@ -330,12 +347,18 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                 If provided, invoked when an instance of `event_cls` (or its subclass) is about to
                 be sent over the network. If None, no callback is scheduled. The event instance is
                 passed to the callback.
+
+            on_sent (Callable[[FifoEventWithCID], Awaitable[None]] | None, optional):
+                If provided, invoked after an instance of `event_cls` (or its subclass) has been
+                successfully written and flushed to the network. If None, no callback is scheduled.
+                The event instance is passed to the callback.
         """
         self._templates[event_cls] = (
             self._normalize_expected(expected_cls),
             on_success,
             on_failure,
             on_send,
+            on_sent,
         )
 
     # --- Pipeline hooks ---------------------------------------------------
@@ -440,6 +463,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                         Callable[[FifoEventWithCID | FifoEventResultWithCID, FifoEventWithCID],
                                  Awaitable[None]],
                         Callable[[FifoEventResultWithCID, FifoEventWithCID], Awaitable[None]],
+                        Callable[[FifoEventWithCID], Awaitable[None]] | None,
                         Callable[[FifoEventWithCID], Awaitable[None]] | None] | None = None
         for cls in type(event).mro():  # search MRO for a registered base class
             if cls in self._templates:
@@ -453,7 +477,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         if cid is None:
             return event
 
-        expected, on_success, on_failure, on_send = template
+        expected, on_success, on_failure, on_send, _on_sent = template
 
         # Schedule the on_send callback only if provided
         if on_send is not None:
@@ -466,4 +490,50 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         return event
 
     async def process_sent_event(self, event: FifoEvent) -> None:
-        pass
+        """
+        Observe an event after it has been successfully sent over the network.
+
+        This hook mirrors `process_outgoing_event()` but runs only after the
+        event was written and flushed on the socket. For CID-capable events that
+        match a registered template, it schedules the optional `on_sent`
+        callback on the internal dispatcher task.
+
+        Notes:
+            - Non-CID events are ignored by this handler and no callback is
+              scheduled.
+            - `FifoEventShutdown` may be observed here as well; it is treated as
+              any other event (no special handling beyond template lookup).
+
+        Args:
+            event (FifoEvent):
+                The event instance that has just been sent.
+
+        Returns:
+            None
+        """
+        # Only work with CID-capable events
+        if not isinstance(event, FifoEventWithCID):
+            return None
+
+        # Find a template for this event class (supporting inheritance chains)
+        template: tuple[NormalizedExpected,
+                        Callable[[FifoEventWithCID | FifoEventResultWithCID, FifoEventWithCID],
+                                 Awaitable[None]],
+                        Callable[[FifoEventResultWithCID, FifoEventWithCID], Awaitable[None]],
+                        Callable[[FifoEventWithCID], Awaitable[None]] | None,
+                        Callable[[FifoEventWithCID], Awaitable[None]] | None] | None = None
+        for cls in type(event).mro():  # search MRO for a registered base class
+            if cls in self._templates:
+                template = self._templates[cls]
+                break
+
+        if template is None:
+            return None
+
+        _expected, _on_success, _on_failure, _on_send, on_sent = template
+
+        # Schedule the on_sent callback only if provided
+        if on_sent is not None:
+            await self._queue.put((self.QueueItemKind.SENT, (on_sent, event)))
+
+        return None

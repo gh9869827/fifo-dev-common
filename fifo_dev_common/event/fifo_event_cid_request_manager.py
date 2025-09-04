@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from uuid import UUID
-from typing import NamedTuple
+from typing import Generic, TypeVar, cast
+from dataclasses import dataclass
 
 from fifo_dev_common.event.fifo_event import (
     FifoEvent,
@@ -16,15 +17,37 @@ from fifo_dev_common.event.fifo_event_queue_network_handler import (
 )
 
 
-class CIDOutcome(NamedTuple):
+TSuccess = TypeVar("TSuccess", bound=FifoEvent)
+TFailure = TypeVar("TFailure", bound=FifoEventResultWithCID)
+
+
+@dataclass(frozen=True)
+class CIDOutcome(Generic[TSuccess, TFailure]):
     """
     Result of a CID request chain.
 
     - ok: True on final success, False on any failure stage
     - event: The final event instance (success or failure)
+
+    Use `success()` and `failure()` to retrieve the event as the
+    expected generic type for each outcome.
     """
     ok: bool
     event: FifoEvent
+
+    def success(self) -> TSuccess:
+        """
+        Return the final event as `TSuccess` (asserts `ok`).
+        """
+        assert self.ok, "Called success() on a failure outcome"
+        return cast(TSuccess, self.event)
+
+    def failure(self) -> TFailure:
+        """
+        Return the final event as `TFailure` (asserts `not ok`).
+        """
+        assert not self.ok, "Called failure() on a success outcome"
+        return cast(TFailure, self.event)
 
 
 class FifoEventCIDRequestManager:
@@ -48,7 +71,7 @@ class FifoEventCIDRequestManager:
 
     _loop: asyncio.AbstractEventLoop
     _handler: FifoEventQueueNetworkAsyncHandlerCID
-    _futures: dict[UUID, asyncio.Future[CIDOutcome]]
+    _futures: dict[UUID, asyncio.Future[CIDOutcome[FifoEvent, FifoEventResultWithCID]]]
 
     def __init__(self,
                  loop: asyncio.AbstractEventLoop,
@@ -120,7 +143,8 @@ class FifoEventCIDRequestManager:
                             transport: SupportsFifoEventPut,
                             req: FifoEventWithCID,
                             *,
-                            timeout: float | None = None) -> CIDOutcome:
+                            timeout: float | None = None) -> CIDOutcome[FifoEvent,
+                                                                        FifoEventResultWithCID]:
         """
         Send a CID-capable request and await the final result event.
 
@@ -141,10 +165,12 @@ class FifoEventCIDRequestManager:
                 indefinitely.
 
         Returns:
-            CIDOutcome:
+            CIDOutcome[FifoEvent, FifoEventResultWithCID]:
                 Wraps success flag and the final event (success or failure).
         """
-        fut: asyncio.Future[CIDOutcome] = self._loop.create_future()
+        fut: asyncio.Future[
+            CIDOutcome[FifoEvent, FifoEventResultWithCID]
+        ] = self._loop.create_future()
         self._futures[req.correlation_id] = fut
 
         try:

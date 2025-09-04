@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from typing import ClassVar
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -26,6 +26,50 @@ from fifo_dev_common.serialization.fifo_serialization import serializable
 
 # pylint: disable=protected-access
 # pyright: reportPrivateUsage=false
+
+
+@FifoEvent.register
+@serializable
+@dataclass(kw_only=True)
+class _TestSuccess(FifoEvent):
+    """Minimal success event for CIDOutcome tests."""
+    event_id: ClassVar[int] = 65001
+
+
+@FifoEvent.register
+@serializable
+@dataclass(kw_only=True)
+class _TestFailure(FifoEventResultWithCID):
+    """Minimal failure event for CIDOutcome tests."""
+    event_id: ClassVar[int] = 65002
+
+
+def test_cid_outcome_success_getter_and_assertion():
+    ev = _TestSuccess()
+    outcome: CIDOutcome[_TestSuccess, _TestFailure] = CIDOutcome(True, ev)
+
+    # success() returns the event as the success type
+    got = outcome.success()
+    assert got is ev
+    assert isinstance(got, _TestSuccess)
+
+    # failure() asserts when called on a success outcome
+    with pytest.raises(AssertionError):
+        _ = outcome.failure()
+
+
+def test_cid_outcome_failure_getter_and_assertion():
+    ev = _TestFailure(code=EErrorCode.ERROR, correlation_id=uuid4())
+    outcome: CIDOutcome[_TestSuccess, _TestFailure] = CIDOutcome(False, ev)
+
+    # failure() returns the event as the failure type
+    got = outcome.failure()
+    assert got is ev
+    assert isinstance(got, _TestFailure)
+
+    # success() asserts when called on a failure outcome
+    with pytest.raises(AssertionError):
+        _ = outcome.success()
 
 
 @pytest.fixture(autouse=True)

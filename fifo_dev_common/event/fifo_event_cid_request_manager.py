@@ -24,6 +24,7 @@ logger = get_logger(__name__)
 
 TSuccess = TypeVar("TSuccess", bound=FifoEvent)
 TFailure = TypeVar("TFailure", bound=FifoEventResultWithCID)
+TValue = TypeVar("TValue")
 
 
 @dataclass(frozen=True)
@@ -434,8 +435,8 @@ class FifoEventCIDRefreshManager:
         self,
         event_cls: type[FifoEventWithCID],
         expected: ExpectedEventClasses,
-        refreshable: FifoRefreshableValue[object],
-        extract: Callable[[FifoEvent], object],
+        refreshable: FifoRefreshableValue[TValue],
+        extract: Callable[[FifoEvent], TValue],
         *,
         success_types: tuple[type[FifoEvent], ...] | None = None,
     ) -> None:
@@ -452,10 +453,10 @@ class FifoEventCIDRefreshManager:
                 class or a sequence of event classes (any of which can satisfy that stage).
                 Example: [FifoEventAck, [FifoEventSuccess, FifoEventFailure]]
 
-            refreshable (FifoRefreshableValue[object]):
+            refreshable (FifoRefreshableValue[TValue]):
                 Cache to update (mark_refreshing/set_success/set_failure).
 
-            extract (Callable[[FifoEvent], object]):
+            extract (Callable[[FifoEvent], TValue]):
                 Function mapping the final success event to the cached value.
 
             success_types (tuple[type[FifoEvent], ...] | None):

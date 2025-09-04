@@ -204,3 +204,135 @@ async def test_cid_request_manager_timeout():
     # Shutdown handler loop
     await handler.process_incoming_event(FifoEventShutdown())
     await handler.join()
+
+
+@pytest.mark.asyncio
+async def test_send_in_background_success_calls_callback_and_releases_lock():
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    mgr = FifoEventCIDRequestManager(asyncio.get_event_loop(), handler)
+    mgr.register(DummyCID, [DummyAck, [DummyDoneSuccess, DummyDoneFailure]])
+
+    transport = _DummyTransport(handler)
+
+    called = asyncio.Event()
+    seen: list[CIDOutcome[FifoEvent, FifoEventResultWithCID]] = []
+    lock = asyncio.Lock()
+
+    async def on_outcome(outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID]) -> None:
+        seen.append(outcome)
+        called.set()
+
+    req = DummyCID(value=10)
+    ok = mgr.send_in_background(transport, req, on_outcome, lock=lock, timeout=1.0)
+    assert ok is True
+
+    # lock should become held shortly after scheduling
+    # spin until handler registers CID
+    while req.correlation_id not in handler._registrations:  # type: ignore[attr-defined]
+        await asyncio.sleep(0)
+    assert lock.locked() is True
+
+    # Simulate successful ACK then DONE success
+    await handler.process_incoming_event(DummyAck(code=EErrorCode.OK, correlation_id=req.correlation_id))
+    await handler.process_incoming_event(DummyDoneSuccess(code=EErrorCode.OK, correlation_id=req.correlation_id))
+
+    await asyncio.wait_for(called.wait(), 1.0)
+    assert seen and seen[0].ok is True
+    assert isinstance(seen[0].event, DummyDoneSuccess)
+
+    # lock released after callback completes
+    # yield once to let done-callback run
+    await asyncio.sleep(0)
+    assert lock.locked() is False
+
+    await handler.process_incoming_event(FifoEventShutdown())
+    await handler.join()
+
+
+@pytest.mark.asyncio
+async def test_send_in_background_returns_false_when_lock_held():
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    mgr = FifoEventCIDRequestManager(asyncio.get_event_loop(), handler)
+    mgr.register(DummyCID, [DummyAck, [DummyDoneSuccess, DummyDoneFailure]])
+
+    transport = _DummyTransport(handler)
+
+    lock = asyncio.Lock()
+    await lock.acquire()
+
+    async def on_outcome(_outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID]) -> None:
+        pass
+
+    req = DummyCID(value=11)
+    ok = mgr.send_in_background(transport, req, on_outcome, lock=lock, timeout=0.1)
+    assert ok is False
+
+    # cleanup
+    lock.release()
+    await handler.process_incoming_event(FifoEventShutdown())
+    await handler.join()
+
+
+@pytest.mark.asyncio
+async def test_send_in_background_failure_calls_callback():
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    mgr = FifoEventCIDRequestManager(asyncio.get_event_loop(), handler)
+    mgr.register(DummyCID, [DummyAck, [DummyDoneSuccess, DummyDoneFailure]])
+
+    transport = _DummyTransport(handler)
+
+    called = asyncio.Event()
+    seen: list[CIDOutcome[FifoEvent, FifoEventResultWithCID]] = []
+
+    async def on_outcome(outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID]) -> None:
+        seen.append(outcome)
+        called.set()
+
+    req = DummyCID(value=12)
+    assert mgr.send_in_background(transport, req, on_outcome, timeout=1.0) is True
+
+    while req.correlation_id not in handler._registrations:  # type: ignore[attr-defined]
+        await asyncio.sleep(0)
+
+    # Simulate failure at ACK stage
+    await handler.process_incoming_event(DummyAck(code=EErrorCode.ERROR, correlation_id=req.correlation_id))
+
+    await asyncio.wait_for(called.wait(), 1.0)
+    assert seen and seen[0].ok is False
+    assert isinstance(seen[0].event, DummyAck)
+
+    await handler.process_incoming_event(FifoEventShutdown())
+    await handler.join()
+
+
+@pytest.mark.asyncio
+async def test_send_in_background_logs_on_callback_exception(caplog: pytest.LogCaptureFixture):
+    import logging
+
+    caplog.set_level(logging.ERROR, logger="fifo_dev_common.event.fifo_event_cid_request_manager")
+
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    mgr = FifoEventCIDRequestManager(asyncio.get_event_loop(), handler)
+    mgr.register(DummyCID, [DummyAck, [DummyDoneSuccess, DummyDoneFailure]])
+
+    transport = _DummyTransport(handler)
+
+    async def on_outcome_raises(_outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID]) -> None:
+        raise RuntimeError("boom")
+
+    req = DummyCID(value=13)
+    assert mgr.send_in_background(transport, req, on_outcome_raises, timeout=1.0) is True
+
+    while req.correlation_id not in handler._registrations:  # type: ignore[attr-defined]
+        await asyncio.sleep(0)
+    await handler.process_incoming_event(DummyAck(code=EErrorCode.OK, correlation_id=req.correlation_id))
+    await handler.process_incoming_event(DummyDoneSuccess(code=EErrorCode.OK, correlation_id=req.correlation_id))
+
+    # Allow task to finish and log
+    await asyncio.sleep(0.05)
+
+    # Shut down the handler loop cleanly
+    await handler.process_incoming_event(FifoEventShutdown())
+    await handler.join()
+
+    assert any("CID background task failed" in rec.getMessage() for rec in caplog.records)

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 from uuid import UUID
-from typing import Generic, TypeVar, cast
+from typing import Generic, TypeVar, cast, Callable, Awaitable
 from dataclasses import dataclass
+
+from fifo_dev_common.logging.logger import get_logger
 
 from fifo_dev_common.event.fifo_event import (
     FifoEvent,
@@ -15,6 +17,8 @@ from fifo_dev_common.event.fifo_event_queue_network_handler import (
     FifoEventQueueNetworkAsyncHandlerCID,
     ExpectedEventClasses,
 )
+
+logger = get_logger(__name__)
 
 
 TSuccess = TypeVar("TSuccess", bound=FifoEvent)
@@ -187,6 +191,79 @@ class FifoEventCIDRequestManager:
         finally:
             # Safety: callbacks pop on completion; this is idempotent
             self._futures.pop(req.correlation_id, None)
+
+    def send_in_background(self,
+                           transport: SupportsFifoEventPut,
+                           req: FifoEventWithCID,
+                           on_outcome: Callable[[CIDOutcome[FifoEvent, FifoEventResultWithCID]],
+                                                Awaitable[None]],
+                           *,
+                           lock: asyncio.Lock | None = None,
+                           timeout: float | None = None) -> bool:
+        """
+        Launch a background task to send a CID-capable request and invoke a callback
+        with the final `CIDOutcome` (success or failure).
+
+        Args:
+            transport (SupportsFifoEventPut):
+                Network client/server (or adapter) exposing an async `put(FifoEvent)` method.
+
+            req (FifoEventWithCID):
+                Outbound request event. Must carry a correlation_id (auto-assigned if None by
+                the event constructor).
+
+            on_outcome (Callable[[CIDOutcome], Awaitable[None]]):
+                Async callback invoked with the final outcome once the request completes
+                (either success or failure). Runs in a background task and must not block
+                the event loop for long periods.
+
+            lock (asyncio.Lock | None, optional):
+                Optional single-flight guard. When provided and already acquired, this function
+                returns False without scheduling a new task. When provided and free, it is
+                acquired before sending and released after the callback completes.
+
+            timeout (float | None, optional):
+                Optional timeout in seconds for awaiting the final result. If None, waits
+                indefinitely.
+
+        Returns:
+            bool:
+                True if a background task was scheduled; False if prevented by `lock` being held.
+        """
+        if lock and lock.locked():
+            return False
+
+        async def _runner() -> None:
+            try:
+                outcome = await self.send_and_wait(transport, req, timeout=timeout)
+                await on_outcome(outcome)
+            finally:
+                if lock and lock.locked():
+                    lock.release()
+
+        if lock:
+            async def _acq_and_run() -> None:
+                await lock.acquire()
+                await _runner()
+            task = self._loop.create_task(_acq_and_run())
+        else:
+            task = self._loop.create_task(_runner())
+
+        def _done(t: asyncio.Task[None]) -> None:
+            # Always-safe logging: avoid traceback and sensitive messages
+            if t.cancelled():
+                logger.warning("CID background task for %s cancelled", type(req).__name__)
+                return
+            exc = t.exception()
+            if exc is not None:
+                logger.error(
+                    "CID background task failed for %s (%s)",
+                    type(req).__name__,
+                    type(exc).__name__,
+                )
+
+        task.add_done_callback(_done)
+        return True
 
 
 __all__ = ["FifoEventCIDRequestManager", "CIDOutcome"]

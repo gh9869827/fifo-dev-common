@@ -341,7 +341,7 @@ class FifoEventCIDBackgroundManager:
     def register(self,
                  event_cls: type[FifoEventWithCID],
                  expected: ExpectedEventClasses,
-                 on_outcome: Callable[[CIDOutcome[FifoEvent, FifoEventResultWithCID],
+                 on_outcome: Callable[[CIDOutcome[TSuccess, TFailure],
                                       FifoEventWithCID], Awaitable[None]]) -> None:
         """
         Register a background outcome callback for an outbound CID-capable request class.
@@ -351,7 +351,7 @@ class FifoEventCIDBackgroundManager:
         original request.
         """
 
-        async def _call_outcome(outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID],
+        async def _call_outcome(outcome: CIDOutcome[TSuccess, TFailure],
                                 req: FifoEventWithCID) -> None:
             # Schedule user callback on the application loop; avoid blocking handler dispatcher
             async def _runner() -> None:

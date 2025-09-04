@@ -23,6 +23,7 @@ from fifo_dev_common.event.fifo_event_queue_network_handler import (
     FifoEventQueueNetworkAsyncHandlerCID,
 )
 from fifo_dev_common.serialization.fifo_serialization import serializable
+from fifo_dev_common.event.fifo_event_protocols import SendStatus
 
 # pylint: disable=protected-access
 # pyright: reportPrivateUsage=false
@@ -167,7 +168,7 @@ async def test_client_server_roundtrip(use_tls: bool, unused_tcp_port: int):
     assert isinstance(recv, DummyEvent)
     assert recv.value == 1
 
-    await client.send(DummyEvent(value=2))
+    assert await client.send(DummyEvent(value=2)) is SendStatus.SENT
     recv = await server._out_queue.get()
     assert isinstance(recv, DummyEvent)
     assert recv.value == 2
@@ -177,7 +178,7 @@ async def test_client_server_roundtrip(use_tls: bool, unused_tcp_port: int):
     assert isinstance(recv, DummyEvent)
     assert recv.value == 3
 
-    await server.send(DummyEvent(value=4))
+    assert await server.send(DummyEvent(value=4)) is SendStatus.SENT
     recv = await client._out_queue.get()
     assert isinstance(recv, DummyEvent)
     assert recv.value == 4
@@ -226,10 +227,10 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
     handler.register_cid_template(DummyCID, [DummyAck], on_success, on_failure)
 
     req = DummyCID(value=5)
-    await client.send(req)
+    assert await client.send(req) is SendStatus.SENT
     srv_req = await server._out_queue.get()
     assert isinstance(srv_req, FifoEventWithCID)
-    await server.send(DummyAck(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
+    assert await server.send(DummyAck(code=EErrorCode.OK, correlation_id=srv_req.correlation_id)) is SendStatus.SENT
 
     ack = await asyncio.wait_for(received, 1.0)
     assert isinstance(ack, DummyAck)
@@ -282,7 +283,7 @@ async def test_cid_handler_on_send_callback_invoked(unused_tcp_port: int):
     )
 
     req = DummyCID(value=42)
-    await client.send(req)
+    assert await client.send(req) is SendStatus.SENT
 
     # Ensure the event is sent over the wire
     srv_req = await asyncio.wait_for(server._out_queue.get(), 1.0)
@@ -339,7 +340,7 @@ async def test_cid_handler_on_sent_callback_invoked(unused_tcp_port: int):
     )
 
     req = DummyCID(value=99)
-    await client.send(req)
+    assert await client.send(req) is SendStatus.SENT
 
     # Ensure the event is sent over the wire
     srv_req = await asyncio.wait_for(server._out_queue.get(), 1.0)
@@ -481,13 +482,13 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
     )
 
     req = DummyCID(value=6)
-    await client.send(req)
+    assert await client.send(req) is SendStatus.SENT
     srv_req = await server._out_queue.get()
     assert isinstance(srv_req, FifoEventWithCID)
-    await server.send(DummyAck(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
+    assert await server.send(DummyAck(code=EErrorCode.OK, correlation_id=srv_req.correlation_id)) is SendStatus.SENT
     with pytest.raises(asyncio.TimeoutError):
         await asyncio.wait_for(ack_event.wait(), 1.0)
-    await server.send(DummyDoneSuccess(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
+    assert await server.send(DummyDoneSuccess(code=EErrorCode.OK, correlation_id=srv_req.correlation_id)) is SendStatus.SENT
     await asyncio.wait_for(done_event.wait(), 1.0)
     assert client._out_queue.empty()
 
@@ -531,17 +532,17 @@ async def test_cid_handler_chain_stops_on_failure(unused_tcp_port: int):
     )
 
     req = DummyCID(value=7)
-    await client.send(req)
+    assert await client.send(req) is SendStatus.SENT
     srv_req = await server._out_queue.get()
     assert isinstance(srv_req, FifoEventWithCID)
 
     # Send a failure ACK - this should trigger on_failure and stop the chain
-    await server.send(DummyAck(code=EErrorCode.ERROR, correlation_id=srv_req.correlation_id))
+    assert await server.send(DummyAck(code=EErrorCode.ERROR, correlation_id=srv_req.correlation_id)) is SendStatus.SENT
     await asyncio.wait_for(failure_event.wait(), 1.0)
 
     # Send a subsequent success event - this should go to the client queue since the
     # handler chain stopped
-    await server.send(DummyDoneSuccess(code=EErrorCode.OK, correlation_id=srv_req.correlation_id))
+    assert await server.send(DummyDoneSuccess(code=EErrorCode.OK, correlation_id=srv_req.correlation_id)) is SendStatus.SENT
     recv = await asyncio.wait_for(client._out_queue.get(), 1.0)
     assert isinstance(recv, DummyDoneSuccess)
 

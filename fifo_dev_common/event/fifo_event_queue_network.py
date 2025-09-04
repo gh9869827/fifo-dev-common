@@ -20,7 +20,7 @@ from fifo_dev_common.event.fifo_event import (
     FifoEvent,
     FifoEventShutdown,
 )
-from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut
+from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut, SendStatus
 from fifo_dev_common.event.fifo_event_queue_network_handler import (
     FifoEventQueueNetworkAsyncHandlerBase,
 )
@@ -381,7 +381,7 @@ class _FifoEventQueueNetworkAsyncMixin:
             if isinstance(event, FifoEventShutdown):
                 break
 
-    async def send(self, event: FifoEvent):
+    async def send(self, event: FifoEvent) -> SendStatus:
         """
         Send a FifoEvent over the network connection.
 
@@ -391,8 +391,7 @@ class _FifoEventQueueNetworkAsyncMixin:
         automatically flushed to ensure delivery.
 
         If the write completes without raising an exception, the handler's `process_sent_event()`
-        method is invoked (if configured). This callback is for notification purposes only; it has
-        no return value. It is invoked with the event that has been successfully sent.
+        method is invoked (if configured) with the event that has been successfully sent.
 
         Note:
             When a FifoEventShutdown is sent, process_outgoing_event() is still invoked so the
@@ -406,6 +405,12 @@ class _FifoEventQueueNetworkAsyncMixin:
             event (FifoEvent):
                 The event to send over the network connection.
 
+        Returns:
+            SendStatus:
+                `SendStatus.SENT` if the event was written (or shutdown propagated).
+                `SendStatus.SUPPRESSED` if the handler suppressed the event (returned None for a
+                non-shutdown event) or if a handler hook failed and the event was discarded.
+
         Raises:
             ConnectionError: If the connection is closed or a network error occurs.
         """
@@ -414,14 +419,14 @@ class _FifoEventQueueNetworkAsyncMixin:
                 event_to_send = await self._handler.process_outgoing_event(event)
             except Exception: # pylint: disable=broad-exception-caught
                 # Broad exception to catch handler errors so a faulty callback can't break the send
-                # pipeline.
+                # pipeline; the event is discarded and treated as suppressed.
                 role = "client" if "Client" in type(self).__name__ else "server"
                 logger.error("[%s] process_outgoing_event handler failed. Discarding event.", role)
                 event_to_send = None
 
             if not isinstance(event, FifoEventShutdown):
                 if event_to_send is None:
-                    return
+                    return SendStatus.SUPPRESSED
                 event = event_to_send
 
         await event.serialize_to_socket_async(self._writer)  # drain handled by serializer
@@ -434,6 +439,8 @@ class _FifoEventQueueNetworkAsyncMixin:
                 # pipeline.
                 role = "client" if "Client" in type(self).__name__ else "server"
                 logger.error("[%s] process_sent_event handler failed.", role)
+
+        return SendStatus.SENT
 
     async def put(self, item: FifoEvent) -> None:
         """

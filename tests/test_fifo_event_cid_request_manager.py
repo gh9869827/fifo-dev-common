@@ -218,7 +218,7 @@ async def test_send_in_background_success_calls_callback_and_releases_lock():
     seen: list[CIDOutcome[FifoEvent, FifoEventResultWithCID]] = []
     lock = asyncio.Lock()
 
-    async def on_outcome(outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID]) -> None:
+    async def on_outcome(outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID], _req: FifoEventWithCID) -> None:
         seen.append(outcome)
         called.set()
 
@@ -260,7 +260,7 @@ async def test_send_in_background_returns_false_when_lock_held():
     lock = asyncio.Lock()
     await lock.acquire()
 
-    async def on_outcome(_outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID]) -> None:
+    async def on_outcome(_outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID], _req: FifoEventWithCID) -> None:
         pass
 
     req = DummyCID(value=11)
@@ -284,7 +284,7 @@ async def test_send_in_background_failure_calls_callback():
     called = asyncio.Event()
     seen: list[CIDOutcome[FifoEvent, FifoEventResultWithCID]] = []
 
-    async def on_outcome(outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID]) -> None:
+    async def on_outcome(outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID], _req: FifoEventWithCID) -> None:
         seen.append(outcome)
         called.set()
 
@@ -317,7 +317,7 @@ async def test_send_in_background_logs_on_callback_exception(caplog: pytest.LogC
 
     transport = _DummyTransport(handler)
 
-    async def on_outcome_raises(_outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID]) -> None:
+    async def on_outcome_raises(_outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID], _req: FifoEventWithCID) -> None:
         raise RuntimeError("boom")
 
     req = DummyCID(value=13)

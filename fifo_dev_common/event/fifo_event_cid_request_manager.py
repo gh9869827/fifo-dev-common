@@ -132,7 +132,7 @@ class FifoEventCIDRequestManager:
             # Cleanup after setting result (idempotent with send_and_wait finally)
             self._futures.pop(src.correlation_id, None)
 
-        self._handler.register_template(
+        self._handler.register_cid_template(
             event_cls,
             expected,
             on_success=on_success,

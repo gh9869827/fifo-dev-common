@@ -223,7 +223,7 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
         received.set_result(ev)
 
     # Register template for DummyCID events
-    handler.register_template(DummyCID, [DummyAck], on_success, on_failure)
+    handler.register_cid_template(DummyCID, [DummyAck], on_success, on_failure)
 
     req = DummyCID(value=5)
     await client.send(req)
@@ -273,7 +273,7 @@ async def test_cid_handler_on_send_callback_invoked(unused_tcp_port: int):
         pass
 
     # Register template with on_send callback
-    handler.register_template(
+    handler.register_cid_template(
         DummyCID,
         [DummyAck],
         on_success,
@@ -330,7 +330,7 @@ async def test_cid_handler_on_sent_callback_invoked(unused_tcp_port: int):
         pass
 
     # Register template with on_sent callback
-    handler.register_template(
+    handler.register_cid_template(
         DummyCID,
         [DummyAck],
         on_success,
@@ -379,7 +379,7 @@ async def test_handler_logs_on_sent_callback_failure(caplog: pytest.LogCaptureFi
         raise TypeError("boom")
 
     # Register a template with an on_sent callback that raises
-    handler.register_template(
+    handler.register_cid_template(
         DummyCID,
         [DummyAck],
         on_success,
@@ -423,7 +423,7 @@ async def test_handler_logs_on_callback_failure(caplog: pytest.LogCaptureFixture
         raise TypeError("boom")
 
     # Register a template with an on_send callback that raises
-    handler.register_template(
+    handler.register_cid_template(
         DummyCID,
         [DummyAck],
         on_success,
@@ -473,7 +473,7 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
         pass
 
     # Register template for DummyCID events with two-stage response
-    handler.register_template(
+    handler.register_cid_template(
         DummyCID,
         [DummyAck, [DummyDoneSuccess, DummyDoneFailure]],
         on_success,
@@ -523,7 +523,7 @@ async def test_cid_handler_chain_stops_on_failure(unused_tcp_port: int):
         failure_event.set()
 
     # Register template for DummyCID events
-    handler.register_template(
+    handler.register_cid_template(
         DummyCID,
         [DummyAck, [DummyDoneSuccess, DummyDoneFailure]],
         on_success,

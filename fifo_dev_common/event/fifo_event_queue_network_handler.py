@@ -120,7 +120,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
     when specific event sequences are received. It supports **template-based registration**:
 
     - You register *event classes* exactly once along with the expected response stages and
-      success/failure callbacks (see `register_template`).
+      success/failure callbacks (see `register_cid_template`).
     - Each time a matching *event instance* (with a correlation ID) is **sent**, the handler
       automatically creates a per-CID registration based on the template.
 
@@ -128,7 +128,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
     auto-registered on send.
 
     Usage:
-        1. Define a template for an outbound event class via `register_template()`
+        1. Define a template for an outbound event class via `register_cid_template()`
         2. Send an instance of that class (must subclass `FifoEventWithCID`)
         3. The handler auto-registers the instance's CID
         4. Incoming events matching the stages trigger the appropriate callbacks
@@ -141,7 +141,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         async def on_ok(ev: FifoEventWithCID | FifoEventResultWithCID) -> None: ...
         async def on_err(ev: FifoEventResultWithCID) -> None: ...
 
-        handler.register_template(
+        handler.register_cid_template(
             FifoEventLoadMap,
             [FifoEventLoadMapAck, [FifoEventLoadMapDoneSuccess, FifoEventLoadMapDoneFailure]],
             on_success=on_ok,
@@ -168,12 +168,14 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         - SUCCESS: schedule the success callback with the incoming event and original request
         - FAILURE: schedule the failure callback with the incoming event and original request
         - SHUTDOWN: signal the dispatcher loop to terminate
+        - LISTENER: schedule an incoming-only listener callback
         """
         SEND = auto()
         SENT = auto()
         SUCCESS = auto()
         FAILURE = auto()
         SHUTDOWN = auto()
+        LISTENER = auto()
 
     # Payloads are uniform tuples; first element is the callback, followed by args.
     QueuePayloadSend: TypeAlias = tuple[
@@ -195,6 +197,10 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         FifoEventWithCID,
     ]
     QueuePayloadShutdown: TypeAlias = tuple[()]
+    QueuePayloadListener: TypeAlias = tuple[
+        Callable[[FifoEvent], Awaitable[None]],
+        FifoEvent,
+    ]
 
     QueueItem: TypeAlias = tuple[
         QueueItemKind,
@@ -202,7 +208,8 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         QueuePayloadSent |
         QueuePayloadSuccess |
         QueuePayloadFailure |
-        QueuePayloadShutdown,
+        QueuePayloadShutdown |
+        QueuePayloadListener,
     ]
 
     _queue: asyncio.Queue[QueueItem]
@@ -231,6 +238,12 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         ],
     ]
 
+    # Incoming-only listeners (non-CID events and shutdown)
+    _listeners: Dict[
+        type[FifoEvent],
+        list[Callable[[FifoEvent], Awaitable[None]]],
+    ]
+
     def __init__(self) -> None:
         """
         Initialize the correlation ID handler and start the background task that
@@ -246,6 +259,9 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         # Class-level templates registered once.
         #   event_cls -> (normalized_expected, on_success, on_failure, on_send, on_sent)
         self._templates = {}
+
+        # Incoming-only listeners registered by event type (supports MRO lookup)
+        self._listeners = {}
 
     async def _run(self) -> None:
         """
@@ -276,6 +292,11 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                         FifoEventQueueNetworkAsyncHandlerCID.QueuePayloadFailure, payload
                     )
                     await cb_failure(ev_failure, req_failure)
+                elif kind is self.QueueItemKind.LISTENER:
+                    cb_listener, ev_any = cast(
+                        FifoEventQueueNetworkAsyncHandlerCID.QueuePayloadListener, payload
+                    )
+                    await cb_listener(ev_any)
                 else:  # pragma: no cover - defensive branch
                     logger.error("unknown queue item kind: %s", kind)
             except (TypeError, AttributeError, ValueError, RuntimeError, asyncio.CancelledError):
@@ -290,6 +311,14 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         """
         await self._task
 
+    async def _schedule_listeners_for(self, event: FifoEvent) -> None:
+        """Queue all incoming-only listeners matching the event's MRO."""
+        for cls in type(event).mro():
+            callbacks = self._listeners.get(cls)
+            if callbacks:
+                for cb in callbacks:
+                    await self._queue.put((self.QueueItemKind.LISTENER, (cb, event)))
+
     # --- Registration API -------------------------------------------------
 
     def _normalize_expected(self, expected_cls: ExpectedEventClasses) -> NormalizedExpected:
@@ -301,7 +330,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                 seq.append([cls for cls in stage])
         return seq
 
-    def register_template(
+    def register_cid_template(
         self,
         event_cls: type[FifoEventWithCID],
         expected_cls: ExpectedEventClasses,
@@ -361,6 +390,30 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             on_sent,
         )
 
+    # --- Incoming-only listener API --------------------------------------
+
+    def register_incoming_listener(
+        self,
+        event_cls: type[FifoEvent],
+        on_event: Callable[[FifoEvent], Awaitable[None]],
+    ) -> None:
+        """
+        Register an incoming-only listener for NON-CID events (and shutdown).
+
+        The callback is invoked for incoming events that are not CID-capable
+        (i.e., not instances of FifoEventWithCID or FifoEventResultWithCID), as
+        well as for FifoEventShutdown. Listeners are observers and do not affect
+        CID stage advancement or event consumption.
+
+        Args:
+            event_cls (type[FifoEvent]):
+                Event class to listen for (supports base-class registration; MRO is used).
+
+            on_event (Callable[[FifoEvent], Awaitable[None]]):
+                Async callback invoked with the incoming event instance.
+        """
+        self._listeners.setdefault(event_cls, []).append(on_event)
+
     # --- Pipeline hooks ---------------------------------------------------
 
     async def process_incoming_event(self, event: FifoEvent) -> FifoEvent | None:
@@ -380,10 +433,14 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                 event itself is returned; otherwise None is returned.
         """
         if isinstance(event, FifoEventShutdown):
+            # Notify listeners first, then schedule shutdown so callbacks run before exit
+            await self._schedule_listeners_for(event)
             await self._queue.put((self.QueueItemKind.SHUTDOWN, ()))
             return event
 
+        # Non-CID events: notify listeners and pass through
         if not isinstance(event, (FifoEventWithCID, FifoEventResultWithCID)):
+            await self._schedule_listeners_for(event)
             return event
 
         cid = getattr(event, "correlation_id", None)

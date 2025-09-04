@@ -241,7 +241,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
     # Incoming-only listeners (non-CID events and shutdown)
     _listeners: Dict[
         type[FifoEvent],
-        list[Callable[[FifoEvent], Awaitable[None]]],
+        list[tuple[Callable[[FifoEvent], Awaitable[None]], bool]],  # (callback, consume)
     ]
 
     def __init__(self) -> None:
@@ -311,13 +311,24 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         """
         await self._task
 
-    async def _schedule_listeners_for(self, event: FifoEvent) -> None:
-        """Queue all incoming-only listeners matching the event's MRO."""
+    async def _notify_listeners(self, event: FifoEvent) -> bool:
+        """
+        Enqueue all matching incoming-only listeners and return whether any consumes.
+
+        Returns:
+            bool:
+                True if at least one matching listener is marked consume=True.
+        """
+        consumed = False
         for cls in type(event).mro():
-            callbacks = self._listeners.get(cls)
-            if callbacks:
-                for cb in callbacks:
-                    await self._queue.put((self.QueueItemKind.LISTENER, (cb, event)))
+            listeners = self._listeners.get(cls)
+            if not listeners:
+                continue
+            for cb, consume in listeners:
+                if consume:
+                    consumed = True
+                await self._queue.put((self.QueueItemKind.LISTENER, (cb, event)))
+        return consumed
 
     # --- Registration API -------------------------------------------------
 
@@ -396,14 +407,20 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         self,
         event_cls: type[FifoEvent],
         on_event: Callable[[FifoEvent], Awaitable[None]],
+        *,
+        consume: bool = False,
     ) -> None:
         """
         Register an incoming-only listener for NON-CID events (and shutdown).
 
         The callback is invoked for incoming events that are not CID-capable
         (i.e., not instances of FifoEventWithCID or FifoEventResultWithCID), as
-        well as for FifoEventShutdown. Listeners are observers and do not affect
-        CID stage advancement or event consumption.
+        well as for FifoEventShutdown. Listeners are observers by default and do
+        not affect CID stage advancement. For non-CID events, if any matching
+        listener is registered with `consume=True`, the event will not be
+        propagated to the output queue, but all listeners will still be invoked.
+        Note: FifoEventShutdown is always propagated to the output queue; the
+        `consume` flag has no effect on shutdown delivery.
 
         Args:
             event_cls (type[FifoEvent]):
@@ -411,37 +428,59 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
 
             on_event (Callable[[FifoEvent], Awaitable[None]]):
                 Async callback invoked with the incoming event instance.
+
+            consume (bool, optional):
+                If True, this listener marks matching non-CID events as consumed,
+                preventing their propagation to the output queue. Has no effect
+                on FifoEventShutdown (which is always propagated). Defaults to False.
         """
-        self._listeners.setdefault(event_cls, []).append(on_event)
+        self._listeners.setdefault(event_cls, []).append((on_event, consume))
 
     # --- Pipeline hooks ---------------------------------------------------
 
     async def process_incoming_event(self, event: FifoEvent) -> FifoEvent | None:
         """
-        Process an incoming event applying success/failure stage rules.
+        Process an incoming event and apply CID stage rules and/or incoming listeners.
 
-        Rules:
-            - A stage advances only if its matching event is classified as success.
-            - On failure (intermediate stage), invoke failure callback, stop (do not advance) and
-              remove the registration.
-            - On the final stage, always invoke the corresponding callback (success or failure)
-              and then remove the registration.
-        
+        Behavior by event kind:
+            - FifoEventShutdown:
+                Notify incoming listeners first, then schedule internal shutdown of the
+                handler's dispatcher. The original shutdown event is returned; callers typically
+                ignore this return value and enqueue the original shutdown event.
+
+            - CID-capable events (FifoEventWithCID, FifoEventResultWithCID):
+                Apply the registered CID template pipeline:
+                  * A stage advances only if its matching event is classified as success.
+                  * On failure at an intermediate stage, invoke the failure callback, stop
+                    (do not advance) and remove the per-CID registration.
+                  * On the final stage, always invoke the corresponding callback (success or
+                    failure) and then remove the per-CID registration. Class-level templates
+                    remain registered and continue to apply to future requests.
+                Returns None when the event is consumed by the CID pipeline; otherwise returns
+                the event to be propagated.
+
+            - Non-CID events:
+                Notify all matching incoming listeners (via MRO). If any matching listener was
+                registered with `consume=True`, the event is considered consumed and None is
+                returned; otherwise the event is returned to be propagated. Incoming listeners
+                do not affect CID stage advancement.
+
         Returns:
             FifoEvent | None:
-                If an event was not consumed to advance the stages or to invoke a callback, the
-                event itself is returned; otherwise None is returned.
+                The event to propagate further (possibly unchanged), or None to indicate the
+                event has been consumed by either the CID pipeline or a consuming incoming
+                listener.
         """
         if isinstance(event, FifoEventShutdown):
             # Notify listeners first, then schedule shutdown so callbacks run before exit
-            await self._schedule_listeners_for(event)
+            await self._notify_listeners(event)
             await self._queue.put((self.QueueItemKind.SHUTDOWN, ()))
             return event
 
-        # Non-CID events: notify listeners and pass through
+        # Non-CID events: notify listeners and optionally consume
         if not isinstance(event, (FifoEventWithCID, FifoEventResultWithCID)):
-            await self._schedule_listeners_for(event)
-            return event
+            consumed = await self._notify_listeners(event)
+            return None if consumed else event
 
         cid = getattr(event, "correlation_id", None)
         if cid is None:

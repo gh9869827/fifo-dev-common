@@ -104,3 +104,48 @@ async def test_incoming_listener_does_not_fire_for_cid():
 
     await handler.process_incoming_event(FifoEventShutdown())
     await handler.join()
+
+
+@pytest.mark.asyncio
+async def test_incoming_listener_consume_suppresses_propagation():
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    evt_called = asyncio.Event()
+
+    async def on_event(_ev: FifoEvent) -> None:
+        evt_called.set()
+
+    # consuming listener
+    handler.register_incoming_listener(_ListenerDummy, on_event, consume=True)
+
+    # process event and verify handler returns None (consumed)
+    result = await handler.process_incoming_event(_ListenerDummy(value=7))
+    assert result is None
+    await asyncio.wait_for(evt_called.wait(), 1.0)
+
+    await handler.process_incoming_event(FifoEventShutdown())
+    await handler.join()
+
+
+@pytest.mark.asyncio
+async def test_multiple_listeners_with_one_consumer_both_called_but_consumed():
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    called = [False, False]
+
+    async def l1(_ev: FifoEvent) -> None:
+        called[0] = True
+
+    async def l2(_ev: FifoEvent) -> None:
+        called[1] = True
+
+    handler.register_incoming_listener(_ListenerDummy, l1, consume=True)
+    handler.register_incoming_listener(_ListenerDummy, l2, consume=False)
+
+    result = await handler.process_incoming_event(_ListenerDummy(value=9))
+    assert result is None  # consumed
+
+    # Give dispatcher time to run callbacks
+    await asyncio.sleep(0.01)
+    assert all(called)
+
+    await handler.process_incoming_event(FifoEventShutdown())
+    await handler.join()

@@ -392,7 +392,15 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                 If provided, invoked after an instance of `event_cls` (or its subclass) has been
                 successfully written and flushed to the network. If None, no callback is scheduled.
                 The event instance is passed to the callback.
+        
+        Raises:
+            ValueError:
+                If a template is already registered for `event_cls`.
         """
+        # Guard: prevent duplicate template registration for the same class
+        if event_cls in self._templates:
+            raise ValueError(f"CID template already registered for {event_cls.__name__}")
+
         self._templates[event_cls] = (
             self._normalize_expected(expected_cls),
             on_success,
@@ -433,8 +441,25 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                 If True, this listener marks matching non-CID events as consumed,
                 preventing their propagation to the output queue. Has no effect
                 on FifoEventShutdown (which is always propagated). Defaults to False.
+        
+        Raises:
+            ValueError:
+                - If `event_cls` is a CID-capable class (listeners are for non-CID and shutdown).
+                - If the same `(event_cls, on_event, consume)` listener is already registered.
         """
-        self._listeners.setdefault(event_cls, []).append((on_event, consume))
+        # Guard: listeners are for non-CID classes and shutdown; disallow CID event classes
+        if issubclass(event_cls, (FifoEventWithCID, FifoEventResultWithCID)):
+            raise ValueError(
+                f"Incoming listeners are for non-CID events; got CID class {event_cls.__name__}"
+            )
+
+        listeners = self._listeners.setdefault(event_cls, [])
+        # Guard: prevent exact duplicate registration of the same callback/consume pair
+        if any(cb is on_event and c == consume for cb, c in listeners):
+            raise ValueError(
+                f"Listener already registered for {event_cls.__name__} with consume={consume}"
+            )
+        listeners.append((on_event, consume))
 
     # --- Pipeline hooks ---------------------------------------------------
 

@@ -207,7 +207,7 @@ async def test_cid_request_manager_timeout():
 
 
 @pytest.mark.asyncio
-async def test_send_in_background_success_calls_callback_and_releases_lock():
+async def test_send_in_background_success_calls_callback():
     handler = FifoEventQueueNetworkAsyncHandlerCID()
     mgr = FifoEventCIDRequestManager(asyncio.get_event_loop(), handler)
     mgr.register(DummyCID, [DummyAck, [DummyDoneSuccess, DummyDoneFailure]])
@@ -216,21 +216,19 @@ async def test_send_in_background_success_calls_callback_and_releases_lock():
 
     called = asyncio.Event()
     seen: list[CIDOutcome[FifoEvent, FifoEventResultWithCID]] = []
-    lock = asyncio.Lock()
 
     async def on_outcome(outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID], _req: FifoEventWithCID) -> None:
         seen.append(outcome)
         called.set()
 
     req = DummyCID(value=10)
-    ok = mgr.send_in_background(transport, req, on_outcome, lock=lock, timeout=1.0)
-    assert ok is True
+    task = mgr.send_in_background(transport, req, on_outcome, timeout=1.0)
+    assert isinstance(task, asyncio.Task)
 
     # lock should become held shortly after scheduling
     # spin until handler registers CID
     while req.correlation_id not in handler._registrations:  # type: ignore[attr-defined]
         await asyncio.sleep(0)
-    assert lock.locked() is True
 
     # Simulate successful ACK then DONE success
     await handler.process_incoming_event(DummyAck(code=EErrorCode.OK, correlation_id=req.correlation_id))
@@ -240,35 +238,9 @@ async def test_send_in_background_success_calls_callback_and_releases_lock():
     assert seen and seen[0].ok is True
     assert isinstance(seen[0].event, DummyDoneSuccess)
 
-    # lock released after callback completes
     # yield once to let done-callback run
     await asyncio.sleep(0)
-    assert lock.locked() is False
 
-    await handler.process_incoming_event(FifoEventShutdown())
-    await handler.join()
-
-
-@pytest.mark.asyncio
-async def test_send_in_background_returns_false_when_lock_held():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
-    mgr = FifoEventCIDRequestManager(asyncio.get_event_loop(), handler)
-    mgr.register(DummyCID, [DummyAck, [DummyDoneSuccess, DummyDoneFailure]])
-
-    transport = _DummyTransport(handler)
-
-    lock = asyncio.Lock()
-    await lock.acquire()
-
-    async def on_outcome(_outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID], _req: FifoEventWithCID) -> None:
-        pass
-
-    req = DummyCID(value=11)
-    ok = mgr.send_in_background(transport, req, on_outcome, lock=lock, timeout=0.1)
-    assert ok is False
-
-    # cleanup
-    lock.release()
     await handler.process_incoming_event(FifoEventShutdown())
     await handler.join()
 
@@ -289,7 +261,8 @@ async def test_send_in_background_failure_calls_callback():
         called.set()
 
     req = DummyCID(value=12)
-    assert mgr.send_in_background(transport, req, on_outcome, timeout=1.0) is True
+    task2 = mgr.send_in_background(transport, req, on_outcome, timeout=1.0)
+    assert isinstance(task2, asyncio.Task)
 
     while req.correlation_id not in handler._registrations:  # type: ignore[attr-defined]
         await asyncio.sleep(0)
@@ -321,7 +294,8 @@ async def test_send_in_background_logs_on_callback_exception(caplog: pytest.LogC
         raise RuntimeError("boom")
 
     req = DummyCID(value=13)
-    assert mgr.send_in_background(transport, req, on_outcome_raises, timeout=1.0) is True
+    task3 = mgr.send_in_background(transport, req, on_outcome_raises, timeout=1.0)
+    assert isinstance(task3, asyncio.Task)
 
     while req.correlation_id not in handler._registrations:  # type: ignore[attr-defined]
         await asyncio.sleep(0)

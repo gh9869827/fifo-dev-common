@@ -222,8 +222,7 @@ class FifoEventCIDRequestManager:
                                                 FifoEventWithCID],
                                                 Awaitable[None]],
                            *,
-                           lock: asyncio.Lock | None = None,
-                           timeout: float | None = None) -> bool:
+                           timeout: float | None = None) -> asyncio.Task[None]:
         """
         Launch a background task to send a CID-capable request and invoke a callback
         with the final `CIDOutcome` (success or failure).
@@ -241,37 +240,19 @@ class FifoEventCIDRequestManager:
                 request completes (either success or failure). Runs in a background task and must
                 not block the event loop for long periods.
 
-            lock (asyncio.Lock | None, optional):
-                Optional single-flight guard. When provided and already acquired, this function
-                returns False without scheduling a new task. When provided and free, it is
-                acquired before sending and released after the callback completes.
-
             timeout (float | None, optional):
                 Optional timeout in seconds for awaiting the final result. If None, waits
                 indefinitely.
 
         Returns:
-            bool:
-                True if a background task was scheduled; False if prevented by `lock` being held.
+            asyncio.Task[None]:
+                The scheduled background task. You may await, cancel, or attach callbacks.
         """
-        if lock and lock.locked():
-            return False
-
         async def _runner() -> None:
-            try:
-                outcome = await self.send_and_wait(transport, req, timeout=timeout)
-                await on_outcome(outcome, req)
-            finally:
-                if lock and lock.locked():
-                    lock.release()
+            outcome = await self.send_and_wait(transport, req, timeout=timeout)
+            await on_outcome(outcome, req)
 
-        if lock:
-            async def _acq_and_run() -> None:
-                await lock.acquire()
-                await _runner()
-            task = self._loop.create_task(_acq_and_run())
-        else:
-            task = self._loop.create_task(_runner())
+        task = self._loop.create_task(_runner())
 
         def _done(t: asyncio.Task[None]) -> None:
             # Always-safe logging: avoid traceback and sensitive messages
@@ -287,7 +268,7 @@ class FifoEventCIDRequestManager:
                 )
 
         task.add_done_callback(_done)
-        return True
+        return task
 
 
 class FifoEventCIDBackgroundManager:

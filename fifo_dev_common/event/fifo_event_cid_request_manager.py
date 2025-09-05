@@ -218,7 +218,7 @@ class FifoEventCIDRequestManager:
     def send_in_background(self,
                            transport: SupportsFifoEventPut,
                            req: FifoEventWithCID,
-                           on_outcome: Callable[[CIDOutcome[FifoEvent, FifoEventResultWithCID],
+                           on_outcome: Callable[[CIDOutcome[TSuccess, TFailure],
                                                 FifoEventWithCID],
                                                 Awaitable[None]],
                            *,
@@ -235,7 +235,7 @@ class FifoEventCIDRequestManager:
                 Outbound request event. Must carry a correlation_id (auto-assigned if None by
                 the event constructor).
 
-            on_outcome (Callable[[CIDOutcome, FifoEventWithCID], Awaitable[None]]):
+            on_outcome (Callable[[TSuccess, TFailure], Awaitable[None]]):
                 Async callback invoked with the final outcome and the original request once the
                 request completes (either success or failure). Runs in a background task and must
                 not block the event loop for long periods.
@@ -250,7 +250,7 @@ class FifoEventCIDRequestManager:
         """
         async def _runner() -> None:
             outcome = await self.send_and_wait(transport, req, timeout=timeout)
-            await on_outcome(outcome, req)
+            await on_outcome(cast(CIDOutcome[TSuccess, TFailure], outcome), req)
 
         task = self._loop.create_task(_runner())
 

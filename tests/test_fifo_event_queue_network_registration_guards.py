@@ -46,17 +46,9 @@ class _NonCID(FifoEvent):
 async def test_duplicate_cid_template_registration_raises():
     h = FifoEventQueueNetworkAsyncHandlerCID()
 
-    async def ok(_e: FifoEventWithCID | FifoEventResultWithCID,
-                 _s: FifoEventWithCID) -> None:
-        pass
-
-    async def err(_e: FifoEventResultWithCID,
-                  _s: FifoEventWithCID) -> None:
-        pass
-
-    h.register_cid_template(_Req, [_Ack], ok, err)
+    h.register_cid_template(_Req, [_Ack])
     with pytest.raises(ValueError):
-        h.register_cid_template(_Req, [_Ack], ok, err)
+        h.register_cid_template(_Req, [_Ack])
 
     # cleanup
     await h.process_incoming_event(FifoEventShutdown())

@@ -14,10 +14,7 @@ from fifo_dev_common.event.fifo_event import (
     FifoEventShutdown,
     EErrorCode,
 )
-from fifo_dev_common.event.fifo_event_cid_request_manager import (
-    FifoEventCIDBackgroundManager,
-    CIDOutcome,
-)
+from fifo_dev_common.event.fifo_event_cid_outcome import FifoEventCIDOutcome
 from fifo_dev_common.event.fifo_event_queue_network_handler import (
     FifoEventQueueNetworkAsyncHandlerCID,
 )
@@ -69,19 +66,18 @@ class DummyDoneSuccess(FifoEventResultWithCID):
 @pytest.mark.asyncio
 async def test_background_manager_success_and_failure():
     handler = FifoEventQueueNetworkAsyncHandlerCID()
-    loop = asyncio.get_event_loop()
-    mgr = FifoEventCIDBackgroundManager(loop, handler)
 
-    outcomes: list[tuple[CIDOutcome[FifoEvent, FifoEventResultWithCID], FifoEventWithCID]] = []
+    outcomes: list[tuple[FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID], FifoEventWithCID]] = []
     called = asyncio.Event()
 
-    async def on_outcome(outcome: CIDOutcome[FifoEvent, FifoEventResultWithCID],
+    async def on_outcome(outcome: FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID],
                          req: FifoEventWithCID) -> None:
         outcomes.append((outcome, req))
         # Signal when we have at least one outcome; subsequent outcomes gathered later
         called.set()
 
-    mgr.register(DummyCID, [DummyAck, DummyDoneSuccess], on_outcome)
+    # register default on_outcome at template level
+    handler.register_cid_template(DummyCID, [DummyAck, DummyDoneSuccess], on_outcome=on_outcome)
 
     # Minimal transport that only triggers template auto-registration
     class _Transport:
@@ -96,8 +92,8 @@ async def test_background_manager_success_and_failure():
     # Send two concurrent requests; both should call the same on_outcome
     req1 = DummyCID(value=1)
     req2 = DummyCID(value=2)
-    await mgr.send(transport, req1)
-    await mgr.send(transport, req2)
+    await transport.put(req1)
+    await transport.put(req2)
 
     # Wait until both CIDs are registered
     while any(req.correlation_id not in handler._registrations  # type: ignore[attr-defined]

@@ -14,6 +14,7 @@ from fifo_dev_common.event.fifo_event import (
     FifoEventShutdown,
     EErrorCode,
 )
+from fifo_dev_common.event.fifo_event_cid_outcome import FifoEventCIDOutcome
 from fifo_dev_common.event.fifo_event_cid_request_manager import (
     FifoEventCIDRefreshManager,
 )
@@ -127,6 +128,60 @@ async def test_refresh_manager_updates_cache():
         await asyncio.sleep(0)
     snap2 = cache.snapshot()
     assert snap2.state.name == CacheState.ERROR.name and snap2.value == 7
+
+    await handler.process_incoming_event(FifoEventShutdown())
+    await handler.join()
+
+
+@pytest.mark.asyncio
+async def test_refresh_manager_optional_on_outcome_called_success_and_failure():
+    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    mgr = FifoEventCIDRefreshManager(handler)
+
+    cache: FifoRefreshableValue[int] = FifoRefreshableValue()
+
+    seen: list[tuple[bool, FifoEvent]] = []
+
+    async def on_done(outcome: FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID] | None, _req: FifoEventWithCID) -> None:
+        if outcome is not None:
+            seen.append((outcome.ok, outcome.event))
+
+    # Register with on_outcome
+    mgr.register(Rq, [Ack, Done], cache, extract=lambda ev: ev.value, success_types=(Done,), on_done=on_done)  # type: ignore
+
+    class _Transport:
+        def __init__(self, h: FifoEventQueueNetworkAsyncHandlerCID) -> None:
+            self.h = h
+
+        async def put(self, item: FifoEvent) -> None:
+            await self.h.process_outgoing_event(item)
+
+    tr = _Transport(handler)
+
+    # Success path (use handler to send so on_done runs)
+    req = Rq()
+    _task_success = handler.send_in_background(tr, req)
+    while req.correlation_id not in handler._registrations:  # type: ignore[attr-defined]
+        await asyncio.sleep(0)
+    await handler.process_incoming_event(Ack(code=EErrorCode.OK, correlation_id=req.correlation_id))
+    await handler.process_incoming_event(Done(code=EErrorCode.OK, correlation_id=req.correlation_id, value=1))
+
+    # Failure path (use handler to send so on_done runs)
+    req2 = Rq()
+    _task_failure = handler.send_in_background(tr, req2)
+    while req2.correlation_id not in handler._registrations:  # type: ignore[attr-defined]
+        await asyncio.sleep(0)
+    await handler.process_incoming_event(Ack(code=EErrorCode.ERROR, correlation_id=req2.correlation_id))
+
+    # Give callbacks time to run
+    for _ in range(50):
+        if len(seen) >= 2:
+            break
+        await asyncio.sleep(0)
+
+    # Validate
+    oks = [ok for ok, _ in seen]
+    assert True in oks and False in oks
 
     await handler.process_incoming_event(FifoEventShutdown())
     await handler.join()

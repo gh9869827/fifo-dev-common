@@ -15,6 +15,7 @@ from fifo_dev_common.event.fifo_event import (
     FifoEventShutdown,
     FifoEventWithCID,
 )
+from fifo_dev_common.event.fifo_event_cid_outcome import FifoEventCIDOutcome
 from fifo_dev_common.event.fifo_event_queue_network import (
     FifoEventQueueNetworkAsyncClient,
     FifoEventQueueNetworkAsyncServer,
@@ -217,14 +218,11 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
 
     received: asyncio.Future[FifoEvent] = asyncio.Future()
 
-    async def on_success(ev: FifoEvent, _source_ev: FifoEvent) -> None:
-        received.set_result(ev)
-
-    async def on_failure(ev: FifoEventResultWithCID, _source_ev: FifoEvent) -> None:
-        received.set_result(ev)
+    async def on_outcome(outcome: FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID], _req: FifoEventWithCID) -> None:
+        received.set_result(outcome.event)
 
     # Register template for DummyCID events
-    handler.register_cid_template(DummyCID, [DummyAck], on_success, on_failure)
+    handler.register_cid_template(DummyCID, [DummyAck], on_outcome=on_outcome)
 
     req = DummyCID(value=5)
     assert await client.send(req) is SendStatus.SENT
@@ -265,20 +263,10 @@ async def test_cid_handler_on_send_callback_invoked(unused_tcp_port: int):
         seen.append(ev)
         send_called.set()
 
-    async def on_success(_ev: FifoEvent, _src: FifoEvent) -> None:
-        # Not used in this test
-        pass
-
-    async def on_failure(_ev: FifoEventResultWithCID, _src: FifoEvent) -> None:
-        # Not used in this test
-        pass
-
     # Register template with on_send callback
     handler.register_cid_template(
         DummyCID,
         [DummyAck],
-        on_success,
-        on_failure,
         on_send=on_send,
     )
 
@@ -322,20 +310,10 @@ async def test_cid_handler_on_sent_callback_invoked(unused_tcp_port: int):
         seen.append(ev)
         sent_called.set()
 
-    async def on_success(_ev: FifoEvent, _src: FifoEvent) -> None:
-        # Not used in this test
-        pass
-
-    async def on_failure(_ev: FifoEventResultWithCID, _src: FifoEvent) -> None:
-        # Not used in this test
-        pass
-
     # Register template with on_sent callback
     handler.register_cid_template(
         DummyCID,
         [DummyAck],
-        on_success,
-        on_failure,
         on_sent=on_sent,
     )
 
@@ -367,14 +345,6 @@ async def test_handler_logs_on_sent_callback_failure(caplog: pytest.LogCaptureFi
 
     handler = FifoEventQueueNetworkAsyncHandlerCID()
 
-    async def on_success(_ev: FifoEvent, _src: FifoEvent) -> None:
-        # Not exercised in this test
-        pass
-
-    async def on_failure(_ev: FifoEventResultWithCID, _src: FifoEvent) -> None:
-        # Not exercised in this test
-        pass
-
     async def on_sent_raises(_ev: FifoEvent) -> None:
         # Raise a whitelisted exception to trigger the error log path
         raise TypeError("boom")
@@ -383,8 +353,6 @@ async def test_handler_logs_on_sent_callback_failure(caplog: pytest.LogCaptureFi
     handler.register_cid_template(
         DummyCID,
         [DummyAck],
-        on_success,
-        on_failure,
         on_sent=on_sent_raises,
     )
 
@@ -411,14 +379,6 @@ async def test_handler_logs_on_callback_failure(caplog: pytest.LogCaptureFixture
 
     handler = FifoEventQueueNetworkAsyncHandlerCID()
 
-    async def on_success(_ev: FifoEvent, _src: FifoEvent) -> None:
-        # Not exercised in this test
-        pass
-
-    async def on_failure(_ev: FifoEventResultWithCID, _src: FifoEvent) -> None:
-        # Not exercised in this test
-        pass
-
     async def on_send_raises(_ev: FifoEvent) -> None:
         # Raise a whitelisted exception to trigger the error log path
         raise TypeError("boom")
@@ -427,8 +387,6 @@ async def test_handler_logs_on_callback_failure(caplog: pytest.LogCaptureFixture
     handler.register_cid_template(
         DummyCID,
         [DummyAck],
-        on_success,
-        on_failure,
         on_send=on_send_raises,
     )
 
@@ -463,22 +421,17 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
     ack_event = asyncio.Event()
     done_event = asyncio.Event()
 
-    async def on_success(ev: FifoEvent, _source_ev: FifoEvent) -> None:
-        if isinstance(ev, DummyAck):
+    async def on_outcome(outcome: FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID], _req: FifoEventWithCID) -> None:
+        if isinstance(outcome.event, DummyAck):
             ack_event.set()
-        else:  # DummyDoneSuccess
+        elif isinstance(outcome.event, DummyDoneSuccess):
             done_event.set()
-
-    async def on_failure(_ev: FifoEventResultWithCID, _source_ev: FifoEvent) -> None:
-        # Should not be called in this test
-        pass
 
     # Register template for DummyCID events with two-stage response
     handler.register_cid_template(
         DummyCID,
         [DummyAck, [DummyDoneSuccess, DummyDoneFailure]],
-        on_success,
-        on_failure
+        on_outcome=on_outcome,
     )
 
     req = DummyCID(value=6)
@@ -516,19 +469,15 @@ async def test_cid_handler_chain_stops_on_failure(unused_tcp_port: int):
 
     failure_event = asyncio.Event()
 
-    async def on_success(_ev: FifoEvent, _source_ev: FifoEvent) -> None:
-        # Should not be called in this test
-        pass
-
-    async def on_failure(_ev: FifoEventResultWithCID, _source_ev: FifoEvent) -> None:
-        failure_event.set()
+    async def on_outcome(outcome: FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID], _req: FifoEventWithCID) -> None:
+        if not outcome.ok:
+            failure_event.set()
 
     # Register template for DummyCID events
     handler.register_cid_template(
         DummyCID,
         [DummyAck, [DummyDoneSuccess, DummyDoneFailure]],
-        on_success,
-        on_failure
+        on_outcome=on_outcome,
     )
 
     req = DummyCID(value=7)

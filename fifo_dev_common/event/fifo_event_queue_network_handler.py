@@ -234,6 +234,8 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             int,
             FifoEventWithCID,
             asyncio.Future[FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID]],
+            OnOutcomeCallback | None,
+            OnSentCallback | None,
         ],
     ]
 
@@ -254,7 +256,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         self._task = asyncio.create_task(self._run())
 
         # Per-CID active registrations created at send-time from templates.
-        #   cid -> (normalized_expected, stage_index, request_event, future)
+        #   cid -> (normalized_expected, stage_index, request_event, future, on_outcome, on_sent)
         self._registrations = {}
 
         # Class-level templates registered once.
@@ -425,7 +427,9 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             await self._notify_listeners(event)
             await self._queue.put((self.QueueItemKind.SHUTDOWN, ()))
             # Cancel and clear all unresolved Futures and registrations
-            for _cid, (_seq, _idx, _req, fut) in list(self._registrations.items()):
+            for _cid, (_seq, _idx, _req, fut, _on_outcome, _on_sent) in list(
+                self._registrations.items()
+            ):
                 if not fut.done():
                     fut.cancel()
             self._registrations.clear()
@@ -444,7 +448,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         if registration is None:
             return event
 
-        seq, idx, request_event, fut = registration
+        seq, idx, request_event, fut, on_outcome, on_sent = registration
         expected = seq[idx]
         if not any(isinstance(event, cls) for cls in expected):
             return event
@@ -456,32 +460,25 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
                 is_failure = True
 
         if not last_stage and not is_failure:
-            self._registrations[cid] = (seq, idx + 1, request_event, fut)
+            self._registrations[cid] = (seq, idx + 1, request_event, fut, on_outcome, on_sent)
             return None
 
         # Flow concludes at this point: remove registration
         self._registrations.pop(cid, None)
 
-        # Resolve built-in future
+        # Resolve built-in future and dispatch stored on_outcome if any
         outcome = cast(
             FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID],
             FifoEventCIDOutcome(not is_failure, event)
         )
+
         if not fut.done():
             fut.set_result(outcome)
 
-        # Dispatch outcome callback using the template default, if any
-        template: FifoEventQueueNetworkAsyncHandlerCID.TemplateContent | None = None
-        for cls in type(request_event).mro():
-            if cls in self._templates:
-                template = self._templates[cls]
-                break
-        if template is not None:
-            _exp, _osend, _osent, cb_outcome, _odone = template
-            if cb_outcome is not None:
-                await self._queue.put(
-                    (self.QueueItemKind.OUTCOME, (cb_outcome, outcome, request_event))
-                )
+        if on_outcome is not None:
+            await self._queue.put(
+                (self.QueueItemKind.OUTCOME, (on_outcome, outcome, request_event))
+            )
 
         return None
 
@@ -522,7 +519,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         if cid is None:
             return event
 
-        expected, on_send, _on_sent, _tmpl_on_outcome, _on_done = template
+        expected, on_send, on_sent, on_outcome, _on_done = template
 
         # Schedule the on_send callback only if provided
         if on_send is not None:
@@ -532,7 +529,8 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             # Fresh stage index 0 for this new request instance, store the request event
             loop = asyncio.get_running_loop()
             fut = loop.create_future()
-            self._registrations[cid] = (expected, 0, event, fut)
+            # Snapshot on_outcome and on_sent from the template for this request
+            self._registrations[cid] = (expected, 0, event, fut, on_outcome, on_sent)
 
         return event
 
@@ -550,6 +548,10 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
               scheduled.
             - `FifoEventShutdown` may be observed here as well; it is treated as
               any other event (no special handling beyond template lookup).
+            - Call order: this hook assumes `process_outgoing_event()` has been
+              called first for the same event instance so that the per-request
+              registration (including the template snapshot) exists. Calling it
+              directly is unsupported and may be ignored.
 
         Args:
             event (FifoEvent):
@@ -562,21 +564,16 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         if not isinstance(event, FifoEventWithCID):
             return None
 
-        # Find a template for this event class (supporting inheritance chains)
-        template: FifoEventQueueNetworkAsyncHandlerCID.TemplateContent | None = None
-        for cls in type(event).mro():  # search MRO for a registered base class
-            if cls in self._templates:
-                template = self._templates[cls]
-                break
-
-        if template is None:
+        # Use stored on_sent if present; otherwise do nothing (unsupported call order)
+        cid = getattr(event, "correlation_id", None)
+        if cid is None:
             return None
-
-        _expected, _on_send, on_sent, _on_outcome, _on_done = template
-
-        # Schedule the on_sent callback only if provided
-        if on_sent is not None:
-            await self._queue.put((self.QueueItemKind.SENT, (on_sent, event)))
+        reg = self._registrations.get(cid)
+        if reg is None:
+            return None
+        _seq, _idx, _req, _fut, _on_outcome_cb, on_sent_cb = reg
+        if on_sent_cb is not None:
+            await self._queue.put((self.QueueItemKind.SENT, (on_sent_cb, event)))
 
         return None
 
@@ -685,7 +682,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         reg = self._registrations.get(cid)
         if reg is None:
             raise ValueError(f"No registration for CID {cid}")
-        _seq, _idx, _req, fut = reg
+        _seq, _idx, _req, fut, _on_outcome, _on_sent = reg
 
         try:
             return await (asyncio.wait_for(fut, timeout) if timeout is not None else fut)

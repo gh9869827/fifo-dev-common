@@ -356,8 +356,10 @@ async def test_handler_logs_on_sent_callback_failure(caplog: pytest.LogCaptureFi
         on_sent=on_sent_raises,
     )
 
-    # Trigger the on_sent path directly without needing a network connection
-    await handler.process_sent_event(DummyCID(value=1))
+    # Trigger the on_sent path: process_outgoing first, then sent for same instance
+    ev = DummyCID(value=1)
+    await handler.process_outgoing_event(ev)
+    await handler.process_sent_event(ev)
 
     # Give the handler loop a moment to process the queued callback
     await asyncio.sleep(0.02)

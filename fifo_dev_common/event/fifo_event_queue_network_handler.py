@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from enum import Enum, auto
-from typing import Awaitable, Callable, Sequence, TypeAlias, cast
+from typing import Awaitable, Callable, Sequence, TypeAlias, cast, TypeVar
 from uuid import UUID
 
 from fifo_dev_common.event.fifo_event import (
@@ -14,10 +14,12 @@ from fifo_dev_common.event.fifo_event import (
     EErrorCode,
 )
 from fifo_dev_common.logging.logger import get_logger
-from fifo_dev_common.event.fifo_event_cid_outcome import FifoEventCIDOutcome
+from fifo_dev_common.event.fifo_event_cid_outcome import FifoEventCIDOutcome, TSuccess, TFailure
 from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut
 
 logger = get_logger(__name__)
+
+TEvent = TypeVar("TEvent", bound=FifoEvent)
 
 # User-facing alias: a sequence where each element represents one stage.
 # An element can be either a single event class (single expected type for that stage)
@@ -45,7 +47,7 @@ OnSentCallback: TypeAlias = Callable[
     Awaitable[None]
 ]
 OnOutcomeCallback: TypeAlias = Callable[
-    [FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID], FifoEventWithCID],
+    [FifoEventCIDOutcome[TSuccess, TFailure], FifoEventWithCID],
     Awaitable[None]
 ]
 OnDoneCallback: TypeAlias = Callable[
@@ -197,7 +199,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
     # Payloads are uniform tuples; first element is the callback, followed by args.
     QueuePayloadSend: TypeAlias = tuple[OnSendCallback, FifoEventWithCID]
     QueuePayloadSent: TypeAlias = tuple[OnSentCallback, FifoEventWithCID]
-    QueuePayloadOutcome: TypeAlias = tuple[OnOutcomeCallback,
+    QueuePayloadOutcome: TypeAlias = tuple[OnOutcomeCallback[FifoEvent, FifoEventResultWithCID],
                                            FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID],
                                            FifoEventWithCID]
     QueuePayloadShutdown: TypeAlias = tuple[()]
@@ -219,7 +221,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         NormalizedExpected,
         OnSendCallback | None,
         OnSentCallback | None,
-        OnOutcomeCallback | None,
+        OnOutcomeCallback[FifoEvent, FifoEventResultWithCID] | None,
         OnDoneCallback | None,
     ]
 
@@ -234,7 +236,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             int,
             FifoEventWithCID,
             asyncio.Future[FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID]],
-            OnOutcomeCallback | None,
+            OnOutcomeCallback[FifoEvent, FifoEventResultWithCID] | None,
             OnSentCallback | None,
         ],
     ]
@@ -339,8 +341,8 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
 
     def register_incoming_listener(
         self,
-        event_cls: type[FifoEvent],
-        on_event: Callable[[FifoEvent], Awaitable[None]],
+        event_cls: type[TEvent],
+        on_event: Callable[[TEvent], Awaitable[None]],
         *,
         consume: bool = False,
     ) -> None:
@@ -357,10 +359,10 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         `consume` flag has no effect on shutdown delivery.
 
         Args:
-            event_cls (type[FifoEvent]):
+            event_cls (type[TEvent]):
                 Event class to listen for (supports base-class registration; MRO is used).
 
-            on_event (Callable[[FifoEvent], Awaitable[None]]):
+            on_event (Callable[[TEvent], Awaitable[None]]):
                 Async callback invoked with the incoming event instance.
 
             consume (bool, optional):
@@ -385,7 +387,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             raise ValueError(
                 f"Listener already registered for {event_cls.__name__} with consume={consume}"
             )
-        listeners.append((on_event, consume))
+        listeners.append((cast(Callable[[FifoEvent], Awaitable[None]], on_event), consume))
 
     async def process_incoming_event(self, event: FifoEvent) -> FifoEvent | None:
         """
@@ -584,7 +586,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         *,
         on_send: OnSendCallback | None = None,
         on_sent: OnSentCallback | None = None,
-        on_outcome: OnOutcomeCallback | None = None,
+        on_outcome: OnOutcomeCallback[FifoEvent, FifoEventResultWithCID] | None = None,
         on_done: OnDoneCallback | None = None,
     ) -> None:
         """
@@ -611,7 +613,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             on_sent (OnSentCallback | None):
                 Optional hook invoked after the event instance was sent.
 
-            on_outcome (OnOutcomeCallback | None):
+            on_outcome (OnOutcomeCallback[FifoEvent, FifoEventResultWithCID] | None):
                 Optional hook invoked when the request reaches a terminal outcome.
 
             on_done (OnDoneCallback | None):

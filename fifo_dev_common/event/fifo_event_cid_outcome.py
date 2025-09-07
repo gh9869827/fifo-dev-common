@@ -6,8 +6,8 @@ from typing import Generic, TypeVar, cast
 from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventResultWithCID
 
 
-TSuccess = TypeVar("TSuccess", bound=FifoEvent)
-TFailure = TypeVar("TFailure", bound=FifoEventResultWithCID)
+TSuccess = TypeVar("TSuccess", bound=FifoEvent, covariant=True)
+TFailure = TypeVar("TFailure", bound=FifoEventResultWithCID, covariant=True)
 
 
 @dataclass(frozen=True)

@@ -586,7 +586,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
         *,
         on_send: OnSendCallback | None = None,
         on_sent: OnSentCallback | None = None,
-        on_outcome: OnOutcomeCallback[FifoEvent, FifoEventResultWithCID] | None = None,
+        on_outcome: OnOutcomeCallback[TSuccess, TFailure] | None = None,
         on_done: OnDoneCallback | None = None,
     ) -> None:
         """
@@ -613,7 +613,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             on_sent (OnSentCallback | None):
                 Optional hook invoked after the event instance was sent.
 
-            on_outcome (OnOutcomeCallback[FifoEvent, FifoEventResultWithCID] | None):
+            on_outcome (OnOutcomeCallback[TSuccess, TFailure] | None):
                 Optional hook invoked when the request reaches a terminal outcome.
 
             on_done (OnDoneCallback | None):
@@ -629,7 +629,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             self._normalize_expected(expected_cls),
             on_send,
             on_sent,
-            on_outcome,
+            cast(OnOutcomeCallback[FifoEvent, FifoEventResultWithCID], on_outcome),
             on_done,
         )
 

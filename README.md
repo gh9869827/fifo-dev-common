@@ -371,6 +371,7 @@ Provides a lightweight, efficient binary serialization framework for Python data
 - Supports scalar types, enums, optional fields, arrays, and fixed-length tuples.
 - Uses dataclass `field` metadata (e.g., `format`, `ptype`) for flexible, extensible field definitions.
 - Custom per-field (de)serialization via `field` metadata callables (`serialize`, `deserialize`, `bytelength`).
+- All serialized data is written and read in little-endian byte order, independent of host architecture.
 - Designed for preallocated buffers to maximize performance and minimize allocations.
 - Works well with microcontroller and embedded system data formats as it is a compact binary format prioritizing direct raw serialization with very little overhead.
 

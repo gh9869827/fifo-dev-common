@@ -57,6 +57,32 @@ def test_serialize_enum(fmt: str):
     assert deserialized_test.b == TestEnum.B
 
 
+@pytest.mark.parametrize("fmt", ["?E<b>", "?E<B>", "?E<h>", "?E<H>", "?E<i>", "?E<I>"])
+def test_serialize_optional_enum(fmt: str):
+    @serializable
+    @dataclass
+    class _TestSerializeOptEnum(FifoSerializable):
+        a: TestEnum | None = field(metadata={"format": fmt, "ptype": TestEnum})
+        b: TestEnum | None = field(metadata={"format": fmt, "ptype": TestEnum})
+
+    test = _TestSerializeOptEnum(TestEnum.A, None)
+
+    byte_size = test.serialized_byte_size()
+    struct_size = struct.calcsize('<' + fmt[3])
+    expected_size = struct_size + 2  # present field + None field
+    assert byte_size == expected_size
+
+    buffer = bytearray(byte_size)
+
+    test.serialize_to_bytes(buffer, 0)
+
+    deserialized_test, _ = _TestSerializeOptEnum.deserialize_from_bytes(buffer, 0)
+
+    assert type(deserialized_test.a) == TestEnum
+    assert deserialized_test.a == TestEnum.A
+    assert deserialized_test.b is None
+
+
 
 @serializable
 @dataclass
@@ -414,6 +440,11 @@ def test_super_combo():
     ("E<_>",  None, "Format string for enum types only supports integer format characters: b, B, h, H, i, I"),
     ("E<d>",  None, "Format string for enum types only supports integer format characters: b, B, h, H, i, I"),
     ("E<I>",  None, "Type must be provided for Enum"),
+    ("?E<",  None, "Invalid format: optional enum format must be five characters ending with '>'"),
+    ("?E<>",  None, "Invalid format: optional enum format must be five characters ending with '>'"),
+    ("?E<_>", None, "Format string for optional enum types only supports integer format characters: b, B, h, H, i, I"),
+    ("?E<d>", None, "Format string for optional enum types only supports integer format characters: b, B, h, H, i, I"),
+    ("?E<I>", None, "Type must be provided for optional Enum"),
 
     ("T<",   None, "Invalid format: tuple format must start with 'T<', end with '>', and contain at least one format character"),
     ("T<>",  None, "Invalid format: tuple format must start with 'T<', end with '>', and contain at least one format character"),

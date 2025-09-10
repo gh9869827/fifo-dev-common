@@ -368,7 +368,7 @@ sock_client.close()
 Provides a lightweight, efficient binary serialization framework for Python dataclasses.
 
 - `@serializable`: Decorator to enable serialization/deserialization on dataclasses.
-- Supports scalar types, enums, optional fields, arrays, and fixed-length tuples.
+- Supports scalar types, enums and optional enums, optional fields, arrays, and fixed-length tuples.
 - Uses dataclass `field` metadata (e.g., `format`, `ptype`) for flexible, extensible field definitions.
 - Custom per-field (de)serialization via `field` metadata callables (`serialize`, `deserialize`, `bytelength`).
 - All serialized data is written and read in little-endian byte order, independent of host architecture.
@@ -392,6 +392,7 @@ Provides a lightweight, efficient binary serialization framework for Python data
 | `?S`       | **Optional variable-length UTF-8 string** | 1-byte presence flag + 4-byte length + UTF-8 encoded bytes            | -
 | `?S[x]`    | **Optional fixed-length UTF-8 string**    | 1-byte presence flag + UTF-8 encoded, space-padded or truncated to `x` bytes | -
 | `E<x>`     | **Enum stored as integer**           | Stored as `x` (e.g., `B`, `H`, `I`)                                    | `x` must be one of: `b B h H i I`                                     |
+| `?E<x>`    | **Optional enum stored as integer**  | 1-byte presence flag + enum stored as `x`                              | `x` must be one of: `b B h H i I`                                     |
 | `_`        | **Nested object**                    | Nested serialization using `ptype`                                     | Requires `ptype`; equivalent to omitting `format`                     |
 | `?_`       | **Optional nested object**           | 1-byte presence flag + nested serialization if present                 | -                                                                     |
 | `[_]`      | **Array of nested objects**          | 4-byte length prefix + consecutive nested serializations               | -                                                                     |

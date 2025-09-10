@@ -126,9 +126,12 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
           - 'B' — unsigned 1-byte integer
 
       - Enum types serialized as unsigned int:
-          - 'E<I>' — Enum stored as a 4-byte unsigned int.
+          - 'E<x>' — Enum stored as integer type `x` (e.g., 'B', 'H', 'I').
             Requires 'ptype' metadata specifying the Enum class.
-            For now, support only type 'I'
+
+      - Optional Enum types serialized as unsigned int:
+          - '?E<x>' — Optional Enum stored as integer type `x` with presence flag.
+            Requires 'ptype' metadata specifying the Enum class.
 
       - Fixed-size tuple of basic types:
           - 'T<xy...>' where x, y, ... are struct format characters.
@@ -198,7 +201,7 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
             - If the 'format' string is invalid for array, optional, or enum types.
             - If a generic array ('[_]'), optional ('?_'), or optional array ('[?_]') format
               is specified without a 'ptype'.
-            - If an enum format ('E<I>') is used without a 'ptype' Enum class.
+            - If an enum format ('E<x>' or '?E<x>') is used without a 'ptype' Enum class.
             - If neither 'format' nor 'ptype' is provided in the field metadata.
     """
     def _format_error(typename: str, allowed_chars: set[str], suffix: str = "") -> str:
@@ -332,6 +335,24 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
 
         if struct_format == "?S":
             return FieldSpecCompiledOptionalString(name)
+
+        if struct_format.startswith("?E<"):
+            if not (len(struct_format) == 5 and struct_format[4] == ">"):
+                raise ValueError(
+                    "Invalid format: optional enum format must be five characters ending with '>'"
+                )
+
+            inner_type = struct_format[3]
+            supported_enum_ints = {"b", "B", "h", "H", "i", "I"}
+            if inner_type not in supported_enum_ints:
+                raise ValueError(
+                    "Format string for optional enum types only supports integer format characters: b, B, h, H, i, I"
+                )
+
+            if ptype is None:
+                raise ValueError("Type must be provided for optional Enum")
+
+            return FieldSpecCompiledOptionalEnum(name, inner_type, ptype)
 
         if struct_format[0] == "?":
             if not len(struct_format) == 2:
@@ -892,6 +913,73 @@ class FieldSpecCompiledOptional(FieldSpecCompiledBasic):
         if getattr(class_obj, self.name) is None:
             return 1
         return 1 + self._struct_format_byte_length
+
+
+class FieldSpecCompiledOptionalEnum(FieldSpecCompiledOptional):
+    """
+    FieldSpecCompiled subclass for optional Enum fields with a presence flag.
+
+    This class serializes an optional Enum as a single byte presence flag
+    followed by the enum value serialized using the specified struct format.
+    During deserialization, the raw value is converted back to an Enum
+    instance of the provided ``ptype``.
+
+    Attributes:
+        ptype (Type[Enum]):
+            The Enum type used for deserialization and validation.
+    """
+
+    ptype: Type[Enum]
+
+    def __init__(self, name: str, struct_format: str, ptype: Type[Enum]):
+        """
+        Initialize the optional Enum field with its name, struct format, and Enum type.
+
+        Args:
+            name (str):
+                The name of the field.
+
+            struct_format (str):
+                The struct format string defining the binary layout.
+
+            ptype (Type[Enum]):
+                The Enum class used to convert the integer value
+                to the corresponding Enum instance.
+        """
+        super().__init__(name, struct_format)
+        self.ptype = ptype
+
+    def deserialize_from_bytes(self, buffer: bytes, idx: int) -> Tuple[Any, int]:
+        """
+        Deserialize the optional Enum field's value from the buffer starting at index ``idx``.
+
+        Reads the presence flag first. If present, the raw integer value is
+        converted to an Enum instance using ``ptype``.
+
+        Args:
+            buffer (bytes):
+                The buffer containing serialized data.
+
+            idx (int):
+                The starting index in the buffer at which to read data.
+
+        Returns:
+            Tuple[Any, int]:
+                - The deserialized Enum instance or ``None`` if not present.
+                - The updated buffer index after reading the presence flag
+                  and value.
+
+        Raises:
+            Implementation-specific exceptions if deserialization fails.
+        """
+        present = struct.unpack_from("<b", buffer, idx)[0]
+        idx += 1
+
+        if present == 0:
+            return None, idx
+
+        obj, = struct.unpack_from('<' + self.struct_format, buffer, idx)
+        return self.ptype(obj), idx + self._struct_format_byte_length
 
 
 class FieldSpecCompiledArray(FieldSpecCompiledBasic):

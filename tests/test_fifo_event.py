@@ -298,6 +298,40 @@ def test_enum_serialization_roundtrip():
     assert restored2.priority == 1
 
 
+@FifoEvent.register
+@serializable
+@dataclass(kw_only=True)
+class PriorityEventOptionalEnum(FifoEvent):
+    event_id: ClassVar[int] = 103
+    default_priority: ClassVar[int] = 5
+
+    value: int = field(metadata={"format": "i"})
+    opt_enum: TestEnum | None = field(default=None, metadata={"format": "?E<I>", "ptype": TestEnum})
+
+    def __init__(self, value: int, opt_enum: TestEnum | None = None, priority: int = -1):
+        super().__init__(priority=priority)
+        self.value = value
+        self.opt_enum = opt_enum
+
+
+def test_optional_enum_serialization_roundtrip():
+    event = PriorityEventOptionalEnum(42, opt_enum=TestEnum.B, priority=99)
+    blob = event.to_bytes()
+    restored = FifoEvent.from_bytes(blob)
+    assert isinstance(restored, PriorityEventOptionalEnum)
+    assert restored.value == 42
+    assert restored.opt_enum == TestEnum.B
+    assert restored.priority == 99
+
+    event2 = PriorityEventOptionalEnum(100, opt_enum=None, priority=1)
+    blob2 = event2.to_bytes()
+    restored2 = FifoEvent.from_bytes(blob2)
+    assert isinstance(restored2, PriorityEventOptionalEnum)
+    assert restored2.value == 100
+    assert restored2.opt_enum is None
+    assert restored2.priority == 1
+
+
 def test_registry_thread_safety() -> None:
     results: list[bool] = []
     def register_event():

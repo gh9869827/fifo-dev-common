@@ -549,7 +549,7 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
                       ssl_ctx: ssl.SSLContext | None = None,
                       server_hostname: str | None = None,
                       connect_timeout: float | None = None,
-                      require_tls: bool = False):
+                      ensure_ssl_ctx: bool = False):
         """
         Establish a connection to a remote server and create a client instance.
 
@@ -588,8 +588,12 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
                 established. If None, no timeout is applied and the call may block indefinitely on
                 network or handshake issues.
 
-            require_tls (bool, optional):
-                If True, require TLS (ssl_ctx must be provided). Defaults to False.
+            ensure_ssl_ctx (bool, optional):
+                If True, ensures an SSL context is provided and raises a ValueError
+                if `ssl_ctx` is None. If False, TLS is used when `ssl_ctx` is
+                supplied; otherwise the connection is plaintext. Defaults to
+                False. Allows implementing an explicit policy verifying that
+                `ssl_ctx` is not None.
 
         Returns:
             FifoEventQueueNetworkAsyncClient:
@@ -599,11 +603,11 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
             ConnectionError: If the connection to the server fails.
             OSError: If there are network-related issues during connection.
             ssl.SSLError: If TLS handshake or verification fails (when `ssl_ctx` is used).
-            ValueError: If require_tls=True but ssl_ctx is None.
+            ValueError: If ensure_ssl_ctx=True but ssl_ctx is None.
         """
         # Add explicit security policy
-        if require_tls and ssl_ctx is None:
-            raise ValueError("TLS is required but no SSL context provided")
+        if ensure_ssl_ctx and ssl_ctx is None:
+            raise ValueError("SSL context is required but none was provided")
 
         if ssl_ctx is not None:
             logger.warning("[client] Establishing TLS 1.3 encrypted connection to %s:%s",
@@ -765,7 +769,7 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
                      handler: FifoEventQueueNetworkAsyncHandlerBase | None = None,
                      *,
                      ssl_ctx: ssl.SSLContext | None = None,
-                     require_tls: bool = False):
+                     ensure_ssl_ctx: bool = False):
         """
         Create a server that accepts exactly one client connection.
 
@@ -796,8 +800,12 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
             ssl_ctx (ssl.SSLContext | None, optional):
                 SSL context configured for TLS 1.3. If provided, enables TLS for the server.
 
-            require_tls (bool, optional):
-                If True, require TLS (ssl_ctx must be provided). Defaults to False.
+            ensure_ssl_ctx (bool, optional):
+                If True, ensures an SSL context is provided and raises a ValueError
+                if `ssl_ctx` is None. If False, TLS is used when `ssl_ctx` is
+                supplied; otherwise the connection is plaintext. Defaults to
+                False. Allows implementing an explicit policy verifying that
+                `ssl_ctx` is not None.
 
         Returns:
             FifoEventQueueNetworkAsyncServer:
@@ -806,11 +814,11 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
         Raises:
             OSError: If there are network-related issues during server creation or binding.
             ssl.SSLError: If TLS setup fails (when `ssl_ctx` is used).
-            ValueError: If require_tls=True but ssl_ctx is None.
+            ValueError: If ensure_ssl_ctx=True but ssl_ctx is None.
         """
         # Add explicit security policy
-        if require_tls and ssl_ctx is None:
-            raise ValueError("TLS is required but no SSL context provided")
+        if ensure_ssl_ctx and ssl_ctx is None:
+            raise ValueError("SSL context is required but none was provided")
 
         if ssl_ctx is not None:
             logger.warning("[server] Accepting TLS 1.3 encrypted connection on %s:%s", host, port)

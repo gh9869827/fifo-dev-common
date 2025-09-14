@@ -193,13 +193,13 @@ async def test_client_server_roundtrip(use_tls: bool, unused_tcp_port: int):
 
 
 @pytest.mark.asyncio
-async def test_require_tls_without_context_raises(unused_tcp_port: int):
+async def test_ensure_ssl_ctx_without_context_raises(unused_tcp_port: int):
     host = "127.0.0.1"
     port = unused_tcp_port
     with pytest.raises(ValueError):
-        await FifoEventQueueNetworkAsyncClient.connect(host, port, require_tls=True)
+        await FifoEventQueueNetworkAsyncClient.connect(host, port, ensure_ssl_ctx=True)
     with pytest.raises(ValueError):
-        await FifoEventQueueNetworkAsyncServer.accept(host, port, require_tls=True)
+        await FifoEventQueueNetworkAsyncServer.accept(host, port, ensure_ssl_ctx=True)
 
 
 @pytest.mark.asyncio

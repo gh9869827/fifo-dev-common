@@ -305,34 +305,6 @@ class FifoEventQueueNetworkAsyncClient(FifoEventQueueConnectorAsyncClient):
     _task: asyncio.Task[None]
     _handler: FifoEventQueueConnectorAsyncHandlerBase | None
 
-    def __init__(self,
-                 reader: asyncio.StreamReader,
-                 writer: asyncio.StreamWriter,
-                 out_queue: asyncio.PriorityQueue[FifoEvent] | None,
-                 handler: FifoEventQueueConnectorAsyncHandlerBase | None = None):
-        """
-        Initialize a FifoEventQueueNetworkAsyncClient with existing connection streams.
-
-        Args:
-            reader (asyncio.StreamReader):
-                The asyncio stream reader for receiving data from the network connection.
-
-            writer (asyncio.StreamWriter):
-                The asyncio stream writer for sending data over the network connection.
-
-            out_queue (asyncio.PriorityQueue[FifoEvent] | None):
-                Optional priority queue for received events. If None, a new queue is created.
-
-            handler (FifoEventQueueConnectorAsyncHandlerBase | None, optional):
-                Handler used to intercept and process events. If None, events are
-                queued and sent directly without additional processing. When provided,
-                the handler can:
-                - process incoming events before they are enqueued,
-                - process outgoing events before they are sent, and
-                - observe sent events after they have been successfully sent.
-        """
-        super().__init__(reader, writer, out_queue, handler)
-
     @classmethod
     async def connect(cls,
                       host: str,

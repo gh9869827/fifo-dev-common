@@ -279,7 +279,12 @@ class FifoEventQueueConnectorAsyncClient(
                 created so the client owns its own buffer.
 
             handler (FifoEventQueueConnectorAsyncHandlerBase | None, optional):
-                Optional handler invoked during event ingress/egress.
+                Handler used to intercept and process events. If None, events are
+                queued and sent directly without additional processing. When provided,
+                the handler can:
+                - process incoming events before they are enqueued,
+                - process outgoing events before they are sent, and
+                - observe sent events after they have been successfully sent.
         """
         self._reader = reader
         self._writer = writer

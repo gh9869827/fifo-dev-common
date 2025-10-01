@@ -9,7 +9,8 @@ license = { file = "LICENSE" }
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "numpy"
+  "numpy",
+  "pyserial-asyncio",
 ]
 
 [project.optional-dependencies]
@@ -34,3 +35,9 @@ source = ["fifo_dev_common"]
 
 [tool.coverage.report]
 omit = ["tests/*"]
+
+[[tool.mypy.overrides]]
+module = [
+  "serial_asyncio",
+]
+follow_untyped_imports = true

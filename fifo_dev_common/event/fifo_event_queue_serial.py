@@ -1,15 +1,14 @@
 """
 Asyncio-based serial transport for `FifoEvent` objects using `serial_asyncio`.
-
-> **Requirements**
-> - Relies on the third-party `pyserial-asyncio` package (`serial_asyncio`).
-> - The serial adapter must present an asyncio-compatible interface exposed by `serial_asyncio`.
 """
 
 from __future__ import annotations
 
 import asyncio
 from typing import Any
+from serial_asyncio import ( # pyright: ignore[reportMissingTypeStubs]
+    open_serial_connection # pyright: ignore[reportUnknownVariableType]
+)
 
 from fifo_dev_common.event.fifo_event import FifoEvent
 from fifo_dev_common.event.fifo_event_queue_connector import (
@@ -47,7 +46,7 @@ class FifoEventQueueSerialAsyncClient(FifoEventQueueConnectorAsyncClient):
         out_queue: asyncio.PriorityQueue[FifoEvent] | None = None,
         handler: FifoEventQueueConnectorAsyncHandlerBase | None = None,
         **serial_kwargs: Any,
-    ) -> "FifoEventQueueSerialAsyncClient":
+    ) -> FifoEventQueueSerialAsyncClient:
         """
         Open an asyncio serial connection and create a serial client instance.
 
@@ -81,8 +80,6 @@ class FifoEventQueueSerialAsyncClient(FifoEventQueueConnectorAsyncClient):
             serial.SerialException: If the serial connection cannot be opened.
             ValueError: If invalid parameters are provided to the underlying serial implementation.
         """
-
-        from serial_asyncio import open_serial_connection
 
         if "url" in serial_kwargs or "baudrate" in serial_kwargs:
             raise ValueError(

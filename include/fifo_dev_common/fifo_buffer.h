@@ -53,6 +53,8 @@
  * Thread Safety:
  * This class is NOT thread-safe. External synchronization is required for concurrent access.
  */
+
+
 /**
  * @brief Lightweight UUID passthrough used for serialization.
  *
@@ -73,25 +75,47 @@ struct FifoUuid {
     /**
      * @brief Creates a canonical nil UUID (all bytes set to zero).
      */
-    static constexpr FifoUuid nil() { return FifoUuid{{}}; }
+    static constexpr FifoUuid nil();
 
     /**
      * @brief Provides read-only access to the raw UUID bytes.
      * @return Pointer to the first byte of the UUID.
      */
-    constexpr const std::uint8_t* data() const { return bytes.data(); }
+    constexpr const std::uint8_t* data() const;
 
     /**
      * @brief Provides mutable access to the raw UUID bytes.
      * @return Pointer to the first byte of the UUID.
      */
-    constexpr std::uint8_t* data() { return bytes.data(); }
+    constexpr std::uint8_t* data();
 
     /**
      * @brief Equality comparison based on the underlying byte representation.
      */
-    bool operator==(const FifoUuid&) const = default;
+    bool operator==(const FifoUuid& other) const;
 };
+
+// ==================
+//   FifoUuid Methods
+// ==================
+
+inline constexpr FifoUuid FifoUuid::nil() {
+    return FifoUuid{{}};
+}
+
+inline constexpr const std::uint8_t* FifoUuid::data() const {
+    return bytes.data();
+}
+
+inline constexpr std::uint8_t* FifoUuid::data() {
+    return bytes.data();
+}
+
+inline bool FifoUuid::operator==(const FifoUuid& other) const {
+    return bytes == other.bytes;
+}
+
+
 
 class FifoBuffer {
 private:
@@ -994,19 +1018,17 @@ constexpr T FifoBuffer::big_to_host(T v) {
 }
 
 template<class T>
-constexpr T FifoBuffer::byteswap_any(T v) {
+constexpr T byteswap_any(T v) {
     static_assert(std::is_trivially_copyable_v<T>, "byteswap_any requires trivially copyable type");
+
     if constexpr (sizeof(T) == 1) {
         return v;
     } else if constexpr (sizeof(T) == 2) {
-        return std::bit_cast<T>(
-            std::byteswap(std::bit_cast<std::uint16_t>(v)));
+        return static_cast<T>(__builtin_bswap16(static_cast<std::uint16_t>(v)));
     } else if constexpr (sizeof(T) == 4) {
-        return std::bit_cast<T>(
-            std::byteswap(std::bit_cast<std::uint32_t>(v)));
+        return static_cast<T>(__builtin_bswap32(static_cast<std::uint32_t>(v)));
     } else if constexpr (sizeof(T) == 8) {
-        return std::bit_cast<T>(
-            std::byteswap(std::bit_cast<std::uint64_t>(v)));
+        return static_cast<T>(__builtin_bswap64(static_cast<std::uint64_t>(v)));
     } else {
         static_assert(sizeof(T) <= 8, "Unsupported type size for byteswap_any");
     }

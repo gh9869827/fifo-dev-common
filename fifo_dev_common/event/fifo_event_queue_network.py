@@ -17,11 +17,11 @@ import hashlib
 from typing import Optional, Sequence, cast
 
 from fifo_dev_common.event.fifo_event import FifoEvent
-from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut, SendStatus
+from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut
 from fifo_dev_common.event.fifo_event_queue_connector import (
     FifoEventQueueConnectorAsyncClient,
-    _FifoEventQueueConnectorAsyncMixin,
-    _bounded_close_and_wait_closed_writer,
+    FifoEventQueueConnectorAsyncMixin,
+    bounded_close_and_wait_closed_writer,
 )
 from fifo_dev_common.event.fifo_event_queue_connector_handler import (
     FifoEventQueueConnectorAsyncHandlerBase,
@@ -440,7 +440,7 @@ class FifoEventQueueNetworkAsyncClient(FifoEventQueueConnectorAsyncClient):
 
 
 class FifoEventQueueNetworkAsyncServer(
-    _FifoEventQueueConnectorAsyncMixin,
+    FifoEventQueueConnectorAsyncMixin,
     SupportsFifoEventPut,
 ):
     """
@@ -613,7 +613,7 @@ class FifoEventQueueNetworkAsyncServer(
             else:
                 # Explicitly reject extra clients
                 logger.warning("[server] rejecting extra client on %s:%s", host, port)
-                await _bounded_close_and_wait_closed_writer(writer, timeout=3.0, label="server")
+                await bounded_close_and_wait_closed_writer(writer, timeout=3.0, label="server")
 
         server = await asyncio.start_server(handle_client, host, port, ssl=ssl_ctx)
 
@@ -651,7 +651,7 @@ class FifoEventQueueNetworkAsyncServer(
                 await self._task
 
         # Close connected writer
-        await _bounded_close_and_wait_closed_writer(self._writer, timeout=3.0, label="server")
+        await bounded_close_and_wait_closed_writer(self._writer, timeout=3.0, label="server")
 
         # Listener was closed in accept(); now wait for it to finish closing
         await _bounded_wait_closed_server(self._server, timeout=3.0)

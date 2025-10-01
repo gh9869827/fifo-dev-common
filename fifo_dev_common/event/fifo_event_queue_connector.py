@@ -21,7 +21,7 @@ from fifo_dev_common.logging.logger import get_logger
 logger = get_logger(__name__)
 
 
-async def _bounded_close_and_wait_closed_writer(
+async def bounded_close_and_wait_closed_writer(
     writer: asyncio.StreamWriter,
     *,
     timeout: float,
@@ -66,7 +66,7 @@ async def _bounded_close_and_wait_closed_writer(
         )
 
 
-class _FifoEventQueueConnectorAsyncMixin:
+class FifoEventQueueConnectorAsyncMixin:
     """
     Mixin with common asyncio connector behaviour.
 
@@ -223,7 +223,7 @@ class _FifoEventQueueConnectorAsyncMixin:
 
 
 class FifoEventQueueConnectorAsyncClient(
-    _FifoEventQueueConnectorAsyncMixin,
+    FifoEventQueueConnectorAsyncMixin,
     SupportsFifoEventPut,
 ):
     """
@@ -314,7 +314,7 @@ class FifoEventQueueConnectorAsyncClient(
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
 
-        await _bounded_close_and_wait_closed_writer(
+        await bounded_close_and_wait_closed_writer(
             self._writer,
             timeout=3.0,
             label="client",

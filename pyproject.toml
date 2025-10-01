@@ -25,6 +25,14 @@ dev = [
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+
+[tool.setuptools.packages.find]
+# section needed because the top-level folder also contains the c++ include directory
+where = ["."]
+include = ["fifo_dev_common*"]   # fifo_dev_common and all its subpackages
+exclude = ["include*"]           # optional safety net
+
+
 [tool.pytest.ini_options]
 addopts = "--cov=fifo_dev_common"
 

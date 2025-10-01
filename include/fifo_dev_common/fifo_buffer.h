@@ -1,22 +1,27 @@
 #pragma once
 
+#include <array>
 #include <bit>
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
-#include <type_traits>
-#include <vector>
 #include <optional>
 #include <string>
+#include <type_traits>
+#include <vector>
 
-#include <boost/asio.hpp>
-#include <boost/beast/core/flat_buffer.hpp>
-#include <boost/asio/buffer.hpp>
-#include <boost/uuid/uuid.hpp>
+#if defined(FIFO_DEV_COMMON_ENABLE_BOOST)
+#  include <boost/asio.hpp>
+#elif defined(__has_include)
+#  if __has_include(<boost/asio.hpp>)
+#    include <boost/asio.hpp>
+#    define FIFO_DEV_COMMON_ENABLE_BOOST 1
+#  endif
+#endif
 
 /**
- * @brief FifoBuffer: A thin convenience wrapper around boost::beast::flat_buffer for cross-language
- * serialization
+ * @brief FifoBuffer: A thin convenience wrapper around a dynamically growing contiguous buffer for
+ * cross-language serialization
  * 
  * This class provides a unified serialization/deserialization interface that matches the format 
  * implemented in Python (FifoSerializable). It enables seamless data exchange between Python and
@@ -31,7 +36,6 @@
  * - Type-safe serialization with compile-time checks
  * - Support for primitive types, strings, arrays, optional values, and nested objects
  * - Automatic capacity management with efficient memory usage
- * - Socket I/O integration for network communication
  * - Length-prefixed writing for variable-size data structures
  * 
  * Serialization Format:
@@ -49,15 +53,56 @@
  * Thread Safety:
  * This class is NOT thread-safe. External synchronization is required for concurrent access.
  */
+/**
+ * @brief Lightweight UUID passthrough used for serialization.
+ *
+ * The structure intentionally leaves its storage uninitialized when default-constructed so that
+ * callers that immediately deserialize into the buffer avoid an unnecessary zero-fill. Callers that
+ * require a known all-zero UUID can use the @ref nil factory.
+ */
+struct FifoUuid {
+    /**
+     * @brief Raw 16-byte UUID storage.
+     *
+     * The bytes are left in an unspecified state after default construction; they are meant to be
+     * written by serialization routines. Use @ref nil when a zero-initialized identifier is
+     * required.
+     */
+    std::array<std::uint8_t, 16> bytes;
+
+    /**
+     * @brief Creates a canonical nil UUID (all bytes set to zero).
+     */
+    static constexpr FifoUuid nil() { return FifoUuid{{}}; }
+
+    /**
+     * @brief Provides read-only access to the raw UUID bytes.
+     * @return Pointer to the first byte of the UUID.
+     */
+    constexpr const std::uint8_t* data() const { return bytes.data(); }
+
+    /**
+     * @brief Provides mutable access to the raw UUID bytes.
+     * @return Pointer to the first byte of the UUID.
+     */
+    constexpr std::uint8_t* data() { return bytes.data(); }
+
+    /**
+     * @brief Equality comparison based on the underlying byte representation.
+     */
+    bool operator==(const FifoUuid&) const = default;
+};
+
 class FifoBuffer {
 private:
 
     /**
-     * @brief Underlying buffer (boost::beast::flat_buffer).
-     * Guarantees a contiguous readable region for the current data segment,
-     * which is the only property relied upon by FifoBuffer serialization.
+     * @brief Underlying buffer storage.
+     * Maintains contiguous storage for both read and write operations while
+     * supporting dynamic growth on platforms without Boost.
      */
-    boost::beast::flat_buffer _buf;
+    std::vector<std::uint8_t> _buffer;
+    std::size_t _read_pos{0};
 
 public:
     /**
@@ -72,10 +117,10 @@ public:
     void clear();
 
     /**
-     * @brief Returns the current size of data in the buffer
-     * @return Number of bytes currently stored
+     * @brief Returns the number of unread bytes remaining in the buffer
+     * @return Unread byte count
      */
-    std::size_t size() const;
+    std::size_t unread_bytes_count() const;
     
     /**
      * @brief Returns the total allocated capacity of the buffer
@@ -84,48 +129,26 @@ public:
     std::size_t capacity() const;
 
     /**
-     * @brief Returns a const pointer to the buffer data
-     * @return Const pointer to buffer data, or nullptr if empty
+     * @brief Ensures that the buffer can accommodate additional bytes without reallocating during
+     *        subsequent writes.
+     * @param additional Number of additional bytes required
      */
-    const uint8_t* data() const;
-    
-    /**
-     * @brief Returns a mutable pointer to the buffer data
-     * @return Mutable pointer to buffer data, or nullptr if empty
-     */
-    uint8_t* data();
+    void ensure_capacity(std::size_t additional);
 
     /**
-     * @brief Reserves additional capacity in the buffer
-     * @param additional Number of additional bytes to reserve
+     * @brief Advances the write cursor without initializing bytes.
+     *        Useful when a caller needs to back-fill a reserved area later.
+     * @param n Number of bytes to append as uninitialized space
      */
-    void reserve(std::size_t additional);
+    void advance_write_head(std::size_t n);
 
     /**
-     * @brief Returns the current write position (equivalent to size)
-     * @return Current buffer size/write position
-     */
-    std::size_t tell() const;
-
-    /**
-     * @brief Reserves space without writing data (for length-prefixed structures)
-     * @param n Number of bytes to skip/reserve
-     */
-    void skip_bytes(std::size_t n);
-    
-    /**
-     * @brief Skips (consumes) n bytes from the read position
-     * @param n Number of bytes to skip
+     * @brief Discards bytes from the readable portion of the buffer.
+     * @param n Number of bytes to drop from the read cursor
      * @return true if successful, false if not enough data available
      */
-    bool skip(std::size_t n);
+    bool advance_read_head(std::size_t n);
     
-    /**
-     * @brief Returns the number of bytes remaining for reading
-     * @return Number of unread bytes
-     */
-    std::size_t remaining() const;
-
     // ******************
     //     WRITERS       *
     // ******************
@@ -157,7 +180,7 @@ public:
      * @brief Writes a UUID to the buffer (16 bytes)
      * @param u The UUID to write
      */
-    void write_uuid(const boost::uuids::uuid& u);
+    void write_uuid(const FifoUuid& u);
     
     /**
      * @brief Writes a string with length prefix (uint32_t length + UTF-8 bytes)
@@ -314,7 +337,7 @@ public:
      * @param u Output UUID variable
      * @return true if successful, false if not enough data
      */
-    bool read_uuid(boost::uuids::uuid& u);
+    bool read_uuid(FifoUuid& u);
     
     /**
      * @brief Reads a string with length prefix from the buffer
@@ -444,6 +467,7 @@ public:
      */
     bool read_bytes(void* dst, std::size_t n);
 
+#if defined(FIFO_DEV_COMMON_ENABLE_BOOST)
     // ******************
     //     SOCKETS       *
     // ******************
@@ -455,16 +479,19 @@ public:
      * @return true if successful, false if socket error occurred
      */
     bool append_from_socket(boost::asio::ip::tcp::socket& socket, std::size_t nb_bytes);
-    
+
     /**
      * @brief Sends entire buffer content to socket (blocking)
      * @param socket The TCP socket to send to
      * @return true if successful, false if socket error occurred
      */
     bool send_to_socket_exact(boost::asio::ip::tcp::socket& socket);
-
+#endif
 
 private:
+
+    void compact();
+    void consume(std::size_t n);
 
     // Generic optional POD writer
     template<typename T>
@@ -473,7 +500,7 @@ private:
     template<typename T>
     bool read_optional_pod(std::optional<T>& out);
 
-    const uint8_t* buffer_data() const;
+    const uint8_t* buffer_unread_data() const;
 
     template<typename T>
     void write_pod(const T& v);
@@ -503,55 +530,54 @@ private:
 
 inline FifoBuffer::FifoBuffer(std::size_t initial_capacity) {
     if (initial_capacity) {
-        _buf.prepare(initial_capacity);
+        _buffer.reserve(initial_capacity);
     }
 }
 
 inline void FifoBuffer::clear() {
-    _buf.consume(_buf.size());
+    _buffer.clear();
+    _read_pos = 0;
 }
 
-inline std::size_t FifoBuffer::size() const {
-    return _buf.size();
+inline std::size_t FifoBuffer::unread_bytes_count() const {
+    return _buffer.size() - _read_pos;
 }
 
 inline std::size_t FifoBuffer::capacity() const {
-    return _buf.capacity();
+    return _buffer.capacity();
 }
 
-inline const uint8_t* FifoBuffer::data() const {
-    return buffer_data();
-}
-
-inline uint8_t* FifoBuffer::data() {
-    return const_cast<uint8_t*>(buffer_data());
-}
-
-inline void FifoBuffer::reserve(std::size_t additional) {
-    if (additional) {
-        _buf.prepare(additional);
+inline void FifoBuffer::ensure_capacity(std::size_t additional) {
+    if (additional == 0) {
+        return;
     }
+    if (_buffer.size() + additional <= _buffer.capacity()) {
+        return;
+    }
+    if (_read_pos > 0) {
+        compact();
+        if (_buffer.size() + additional <= _buffer.capacity()) {
+            return;
+        }
+    }
+    _buffer.reserve(_buffer.size() + additional);
 }
 
-inline std::size_t FifoBuffer::tell() const {
-    return _buf.size();
+inline void FifoBuffer::advance_write_head(std::size_t n) {
+    if (n == 0) {
+        return;
+    }
+    ensure_capacity(n);
+    const auto old_size = _buffer.size();
+    _buffer.resize(old_size + n);
 }
 
-inline void FifoBuffer::skip_bytes(std::size_t n) {
-    auto mb = _buf.prepare(n);
-    _buf.commit(n);  // Just commit the space without writing anything
-}
-
-inline bool FifoBuffer::skip(std::size_t n) {
-    if (_buf.size() < n) {
+inline bool FifoBuffer::advance_read_head(std::size_t n) {
+    if (unread_bytes_count() < n) {
         return false;
     }
-    _buf.consume(n);
+    consume(n);
     return true;
-}
-
-inline std::size_t FifoBuffer::remaining() const {
-    return _buf.size();
 }
 
 // ==================
@@ -570,8 +596,8 @@ inline void FifoBuffer::write_uint64_t(uint64_t v) { write_pod(v); }
 inline void FifoBuffer::write_float(float v) { write_pod(v); }
 inline void FifoBuffer::write_double(double v) { write_pod(v); }
 
-inline void FifoBuffer::write_uuid(const boost::uuids::uuid& u) {
-    write_bytes(u.data, 16);
+inline void FifoBuffer::write_uuid(const FifoUuid& u) {
+    write_bytes(u.data(), 16);
 }
 
 inline void FifoBuffer::write_string(const std::string& s) {
@@ -657,25 +683,24 @@ inline void FifoBuffer::write_optional_string(const std::optional<std::string>& 
 }
 
 inline void FifoBuffer::write_bytes(const void* src, std::size_t n) {
-    auto mb = _buf.prepare(n);
-    boost::asio::buffer_copy(mb, boost::asio::buffer(src, n));
-    _buf.commit(n);
+    if (n == 0) {
+        return;
+    }
+    ensure_capacity(n);
+    const auto old_size = _buffer.size();
+    _buffer.resize(old_size + n);
+    std::memmove(_buffer.data() + old_size, src, n);
 }
 
 inline void FifoBuffer::write_uint32_t_at(std::size_t pos, uint32_t value) {
-    if (pos + sizeof(uint32_t) > _buf.size()) {
+    if (pos + sizeof(uint32_t) > _buffer.size()) {
         throw std::runtime_error("write_uint32_t_at: position out of bounds");
     }
 
     // Convert to little-endian for consistency with write_uint32_t()
     const uint32_t le = host_to_little(value);
 
-    auto seq = _buf.data();
-    auto it = boost::asio::buffer_sequence_begin(seq);
-    auto* data_ptr = const_cast<std::uint8_t*>(
-        reinterpret_cast<const std::uint8_t*>(it->data()));
-
-    std::memcpy(data_ptr + pos, &le, sizeof(le));
+    std::memcpy(_buffer.data() + pos, &le, sizeof(le));
 }
 
 // ==================
@@ -693,26 +718,26 @@ inline bool FifoBuffer::read_uint64_t(uint64_t& v) { return read_pod(v); }
 inline bool FifoBuffer::read_float(float& v) { return read_pod(v); }
 inline bool FifoBuffer::read_double(double& v) { return read_pod(v); }
 
-inline bool FifoBuffer::read_uuid(boost::uuids::uuid& u) {
-    if (_buf.size() < 16) {
+inline bool FifoBuffer::read_uuid(FifoUuid& u) {
+    if (unread_bytes_count() < 16) {
         return false;
     }
-    std::memcpy(u.data, buffer_data(), 16);
-    _buf.consume(16);
+    std::memcpy(u.data(), buffer_unread_data(), 16);
+    consume(16);
     return true;
 }
 
 inline bool FifoBuffer::read_string(std::string& out) {
     uint32_t len;
-    if (!read_uint32_t(len) || _buf.size() < len) {
+    if (!read_uint32_t(len) || unread_bytes_count() < len) {
         return false;
     }
     if (len == 0) {
         out.clear();
         return true;
     }
-    out.assign(reinterpret_cast<const char*>(buffer_data()), len);
-    _buf.consume(len);
+    out.assign(reinterpret_cast<const char*>(buffer_unread_data()), len);
+    consume(len);
     return true;
 }
 
@@ -722,13 +747,13 @@ bool FifoBuffer::read_array_primitive_integer(std::vector<T>& out) {
     static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
     
     uint32_t len;
-    if (!read_uint32_t(len) || _buf.size() < len * sizeof(T)) {
+    if (!read_uint32_t(len) || unread_bytes_count() < len * sizeof(T)) {
         return false;
     }
     out.resize(len);
     if (len > 0) {
-        std::memcpy(out.data(), buffer_data(), len * sizeof(T));
-        _buf.consume(len * sizeof(T));
+        std::memcpy(out.data(), buffer_unread_data(), len * sizeof(T));
+        consume(len * sizeof(T));
 
         if constexpr (sizeof(T) > 1) {
             if constexpr (std::endian::native != std::endian::little) {
@@ -791,47 +816,67 @@ inline bool FifoBuffer::read_optional_string(std::optional<std::string>& out) {
         return true;
     }
     uint32_t len;
-    if (!read_uint32_t(len) || _buf.size() < len) {
+    if (!read_uint32_t(len) || unread_bytes_count() < len) {
         return false;
     }
     if (len == 0) {
         out = std::string();
-        return true;    
+        return true;
     }
-    out.emplace(reinterpret_cast<const char*>(buffer_data()), len); _buf.consume(len); return true;
-}
-
-inline bool FifoBuffer::read_bytes(void* dst, std::size_t n) {
-    if (_buf.size() < n) {
-        return false;
-    }
-    std::memcpy(dst, buffer_data(), n);
-    _buf.consume(n);
+    out.emplace(reinterpret_cast<const char*>(buffer_unread_data()), len);
+    consume(len);
     return true;
 }
 
-// ==================
-//     SOCKETS       
-// ==================
+inline bool FifoBuffer::read_bytes(void* dst, std::size_t n) {
+    if (unread_bytes_count() < n) {
+        return false;
+    }
+    std::memcpy(dst, buffer_unread_data(), n);
+    consume(n);
+    return true;
+}
+
+#if defined(FIFO_DEV_COMMON_ENABLE_BOOST)
 
 inline bool FifoBuffer::append_from_socket(boost::asio::ip::tcp::socket& socket, std::size_t nb_bytes) {
-    boost::system::error_code ec;
-    auto mb = _buf.prepare(nb_bytes);
-    std::size_t n = boost::asio::read(socket, mb, boost::asio::transfer_exactly(nb_bytes), ec);
-    if (!ec) {
-        _buf.commit(n);
+    if (nb_bytes == 0) {
+        return true;
     }
-    return !ec;
+    boost::system::error_code ec;
+    ensure_capacity(nb_bytes);
+    const auto start = _buffer.size();
+    _buffer.resize(start + nb_bytes);
+    auto* dest = _buffer.data() + start;
+    const std::size_t n = boost::asio::read(
+        socket,
+        boost::asio::buffer(dest, nb_bytes),
+        boost::asio::transfer_exactly(nb_bytes),
+        ec);
+    if (ec) {
+        _buffer.resize(start);
+        return false;
+    }
+    if (n < nb_bytes) {
+        _buffer.resize(start + n);
+        return false;
+    }
+    return true;
 }
 
 inline bool FifoBuffer::send_to_socket_exact(boost::asio::ip::tcp::socket& socket) {
+    if (unread_bytes_count() == 0) {
+        return true;
+    }
     boost::system::error_code ec;
-    boost::asio::write(socket, _buf, ec);
+    boost::asio::write(socket, boost::asio::buffer(buffer_unread_data(), unread_bytes_count()), ec);
     return !ec;
 }
 
+#endif
+
 // ==================
-//   PRIVATE HELPERS 
+//   PRIVATE HELPERS
 // ==================
 
 template<typename T>
@@ -862,13 +907,34 @@ bool FifoBuffer::read_optional_pod(std::optional<T>& out) {
     return true;
 }
 
-inline const uint8_t* FifoBuffer::buffer_data() const {
-    if (_buf.size() == 0) {
+inline void FifoBuffer::compact() {
+    if (_read_pos == 0) {
+        return;
+    }
+    if (_read_pos >= _buffer.size()) {
+        _buffer.clear();
+        _read_pos = 0;
+        return;
+    }
+    const std::size_t unread = _buffer.size() - _read_pos;
+    std::memmove(_buffer.data(), _buffer.data() + _read_pos, unread); // memmove tolerates overlapping ranges
+    _buffer.resize(unread); // resize preserves capacity, so no reallocation occurs here
+    _read_pos = 0;
+}
+
+inline void FifoBuffer::consume(std::size_t n) {
+    _read_pos += n;
+    if (_read_pos >= _buffer.size()) {
+        _buffer.clear();
+        _read_pos = 0;
+    }
+}
+
+inline const uint8_t* FifoBuffer::buffer_unread_data() const {
+    if (unread_bytes_count() == 0) {
         return nullptr;
     }
-    auto seq = _buf.data();
-    auto it  = boost::asio::buffer_sequence_begin(seq);
-    return static_cast<const uint8_t*>(it->data());
+    return _buffer.data() + _read_pos;
 }
 
 template<typename T>
@@ -882,13 +948,13 @@ inline void FifoBuffer::write_pod(const T& v) {
 template<typename T>
 inline bool FifoBuffer::read_pod(T& out) {
     static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
-    if (_buf.size() < sizeof(T)) {
+    if (unread_bytes_count() < sizeof(T)) {
         return false;
     }
 
     T raw;
-    std::memcpy(&raw, buffer_data(), sizeof(T));
-    _buf.consume(sizeof(T));
+    std::memcpy(&raw, buffer_unread_data(), sizeof(T));
+    consume(sizeof(T));
 
     out = little_to_host(raw);
 

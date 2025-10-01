@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from fifo_dev_common.event.fifo_event import FifoEvent
 from fifo_dev_common.event.fifo_event_queue_connector_handler import (
     FifoEventQueueConnectorAsyncHandlerBase,
 )
@@ -13,8 +15,14 @@ from fifo_dev_common.event.fifo_event_queue_serial import (
 )
 
 
+# Accessing private members on purpose to verify internal state in tests
+# pyright: reportPrivateUsage=false
+# pylint: disable=protected-access
+
+
 @pytest.mark.asyncio
-async def test_connect_opens_serial_connection(monkeypatch, caplog):
+async def test_connect_opens_serial_connection(monkeypatch: pytest.MonkeyPatch,
+                                               caplog: pytest.LogCaptureFixture):
     """connect() should open the serial link and initialize the client."""
 
     fake_reader = MagicMock(spec=asyncio.StreamReader)
@@ -26,7 +34,7 @@ async def test_connect_opens_serial_connection(monkeypatch, caplog):
         open_mock,
     )
 
-    async def dummy_network_to_queue(self):  # pragma: no cover - trivial coroutine
+    async def dummy_network_to_queue(_self: Any):  # pragma: no cover - trivial coroutine
         return None
 
     monkeypatch.setattr(
@@ -35,7 +43,7 @@ async def test_connect_opens_serial_connection(monkeypatch, caplog):
         dummy_network_to_queue,
     )
 
-    queue: asyncio.PriorityQueue = asyncio.PriorityQueue()
+    queue: asyncio.PriorityQueue[FifoEvent] = asyncio.PriorityQueue()
     handler = MagicMock(spec=FifoEventQueueConnectorAsyncHandlerBase)
 
     caplog.set_level("WARNING", logger="fifo_dev_common.event.fifo_event_queue_serial")

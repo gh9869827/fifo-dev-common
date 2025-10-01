@@ -12,8 +12,8 @@ from fifo_dev_common.event.fifo_event import (
     FifoEventShutdown,
     EErrorCode,
 )
-from fifo_dev_common.event.fifo_event_queue_network_handler import (
-    FifoEventQueueNetworkAsyncHandlerCID,
+from fifo_dev_common.event.fifo_event_queue_connector_handler import (
+    FifoEventQueueConnectorAsyncHandlerCID,
 )
 from fifo_dev_common.serialization.fifo_serialization import serializable
 
@@ -44,7 +44,7 @@ class _NonCID(FifoEvent):
 
 @pytest.mark.asyncio
 async def test_duplicate_cid_template_registration_raises():
-    h = FifoEventQueueNetworkAsyncHandlerCID()
+    h = FifoEventQueueConnectorAsyncHandlerCID()
 
     h.register_cid_template(_Req, [_Ack])
     with pytest.raises(ValueError):
@@ -57,7 +57,7 @@ async def test_duplicate_cid_template_registration_raises():
 
 @pytest.mark.asyncio
 async def test_incoming_listener_guards_and_dedup():
-    h = FifoEventQueueNetworkAsyncHandlerCID()
+    h = FifoEventQueueConnectorAsyncHandlerCID()
 
     async def cb(_e: FifoEvent):
         pass

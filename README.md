@@ -25,8 +25,10 @@ It provides the following for runtime type checks and casting, docstring parsing
 - `recv_all(sock, n)`: Efficiently receive exactly `n` bytes from a socket-like object supporting `recv_into()`.
 - `class FifoEvent`: Base class for binary-serializable events, with factory deserialization and class registration for cross-system use.
 - `class FifoEventQueueForwarderMpToAsync`: Bridges multiprocessing and asyncio event queues via a background thread.
+- `class FifoEventQueueConnectorAsyncClient`: Shared asyncio client helpers for stream-based transports.
 - `class FifoEventQueueNetworkAsyncClient` / `class FifoEventQueueNetworkAsyncServer`: Asyncio-based network communication for FifoEvent objects over TCP with optional TLS 1.3 encryption.
-- `class FifoEventQueueNetworkAsyncHandlerCID`: Correlation-ID request/response helpers via `register_cid_template`, `send_and_wait`, and `send_in_background`; outcomes use `FifoEventCIDOutcome`.
+- `class FifoEventQueueSerialAsyncClient`: Asyncio serial communication for environments exposing serial connections via `serial_asyncio`.
+- `class FifoEventQueueConnectorAsyncHandlerCID`: Correlation-ID request/response helpers via `register_cid_template`, `send_and_wait`, and `send_in_background`; outcomes use `FifoEventCIDOutcome`.
 - `class FifoProcessManager`: Manager for running workers in separate OS processes with interprocess communication. Abstracts process creation, startup, and shutdown while bridging multiprocessing queues with asyncio. Supports both async and sync worker callbacks, with correlation ID tracking for request/response workflows.
 - `get_logger()`: Returns a logger instance with `.trace()` support for fine-grained debugging. Registers a custom TRACE level and logger class.
 - `class FifoRefreshableValue`: Lock-free cache for asynchronously refreshed values with explicit state transitions and immutable snapshots.
@@ -44,7 +46,9 @@ It provides the following for runtime type checks and casting, docstring parsing
   - [fifo_serialization](#fifo_dev_commonserializationfifo_serialization)
   - [fifo_event](#fifo_dev_commoneventfifo_event)
   - [fifo_event_queue_forwarder](#fifo_dev_commoneventfifo_event_queue_forwarder)
+  - [fifo_event_queue_connector](#fifo_dev_commoneventfifo_event_queue_connector)
   - [fifo_event_queue_network](#fifo_dev_commoneventfifo_event_queue_network)
+  - [fifo_event_queue_serial](#fifo_dev_commoneventfifo_event_queue_serial)
   - [fifo_process_manager](#fifo_dev_commonprocessutilsfifo_process_manager)
   - [logger](#fifo_dev_commonlogginglogger)
   - [fifo_refreshable_value](#fifo_dev_commonstatefifo_refreshable_value)
@@ -823,9 +827,22 @@ if __name__ == "__main__":
 
 ---
 
+### `fifo_dev_common.event.fifo_event_queue_connector`
+
+Reusable asyncio components shared by the transport-specific clients.
+
+- `FifoEventQueueConnectorAsyncClient`: manages the background reader task,
+  output queue, and graceful shutdown for any ``StreamReader``/``StreamWriter`` pair.
+- `FifoEventQueueConnectorAsyncHandlerCID`: correlation-ID helper powering
+  the higher-level network and serial helpers.
+
+---
+
 ### `fifo_dev_common.event.fifo_event_queue_network`
 
-Asyncio-based TCP transport for `FifoEvent` objects, with optional TLS 1.3 encryption.
+Asyncio-based TCP transport for `FifoEvent` objects, built on top of
+`asyncio.open_connection()` / `asyncio.start_server()` with optional TLS 1.3
+encryption.
 
 - `FifoEventQueueNetworkAsyncClient`: sends events immediately; receives events in a background task and enqueues them in a local `asyncio.PriorityQueue`.
 - `FifoEventQueueNetworkAsyncServer`: accepts **exactly one** client at a time (additional clients are rejected until the connection closes); sends events immediately and receives events in a background task, enqueuing them in a local `asyncio.PriorityQueue`.
@@ -924,6 +941,15 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+---
+
+### `fifo_dev_common.event.fifo_event_queue_serial`
+
+Asyncio serial transport built on top of `serial_asyncio.open_serial_connection()`.
+
+- `FifoEventQueueSerialAsyncClient`: leverages the shared connector base to reuse
+  the same API as the TCP client while targeting serial links.
 
 ---
 

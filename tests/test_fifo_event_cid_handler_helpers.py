@@ -15,8 +15,8 @@ from fifo_dev_common.event.fifo_event import (
     EErrorCode,
 )
 from fifo_dev_common.event.fifo_event_cid_outcome import FifoEventCIDOutcome
-from fifo_dev_common.event.fifo_event_queue_network_handler import (
-    FifoEventQueueNetworkAsyncHandlerCID,
+from fifo_dev_common.event.fifo_event_queue_connector_handler import (
+    FifoEventQueueConnectorAsyncHandlerCID,
 )
 from fifo_dev_common.serialization.fifo_serialization import serializable
 
@@ -124,7 +124,7 @@ class _DummyTransport:
     auto-registration on the send path.
     """
 
-    def __init__(self, handler: FifoEventQueueNetworkAsyncHandlerCID) -> None:
+    def __init__(self, handler: FifoEventQueueConnectorAsyncHandlerCID) -> None:
         self._handler = handler
 
     async def put(self, item: FifoEvent) -> None:  # SupportsFifoEventPut
@@ -133,7 +133,7 @@ class _DummyTransport:
 
 @pytest.mark.asyncio
 async def test_cid_request_manager_success_flow():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     handler.register_cid_template(DummyCID, [DummyAck, [DummyDoneSuccess, DummyDoneFailure]])
 
     transport = _DummyTransport(handler)
@@ -160,7 +160,7 @@ async def test_cid_request_manager_success_flow():
 
 @pytest.mark.asyncio
 async def test_cid_request_manager_failure_on_ack():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     handler.register_cid_template(DummyCID, [DummyAck, [DummyDoneSuccess, DummyDoneFailure]])
 
     transport = _DummyTransport(handler)
@@ -185,7 +185,7 @@ async def test_cid_request_manager_failure_on_ack():
 
 @pytest.mark.asyncio
 async def test_handler_timeout():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     handler.register_cid_template(DummyCID, [DummyAck, [DummyDoneSuccess, DummyDoneFailure]])
 
     transport = _DummyTransport(handler)
@@ -202,7 +202,7 @@ async def test_handler_timeout():
 
 @pytest.mark.asyncio
 async def test_send_in_background_success_calls_callback():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
 
     transport = _DummyTransport(handler)
 
@@ -242,7 +242,7 @@ async def test_send_in_background_success_calls_callback():
 
 @pytest.mark.asyncio
 async def test_send_in_background_failure_calls_callback():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
 
     transport = _DummyTransport(handler)
 
@@ -278,12 +278,12 @@ async def test_send_in_background_failure_calls_callback():
 async def test_send_in_background_logs_on_callback_exception(caplog: pytest.LogCaptureFixture):
     import logging
 
-    caplog.set_level(logging.ERROR, logger="fifo_dev_common.event.fifo_event_queue_network_handler")
+    caplog.set_level(logging.ERROR, logger="fifo_dev_common.event.fifo_event_queue_connector_handler")
 
     async def on_outcome_raises(_outcome: FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID], _req: FifoEventWithCID) -> None:
         raise RuntimeError("boom")
 
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     handler.register_cid_template(DummyCID, [DummyAck, [DummyDoneSuccess, DummyDoneFailure]], on_outcome=on_outcome_raises)
 
     transport = _DummyTransport(handler)

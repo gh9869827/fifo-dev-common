@@ -20,8 +20,11 @@ from fifo_dev_common.event.fifo_event_queue_network import (
     FifoEventQueueNetworkAsyncClient,
     FifoEventQueueNetworkAsyncServer,
 )
-from fifo_dev_common.event.fifo_event_queue_network_handler import (
-    FifoEventQueueNetworkAsyncHandlerCID,
+from fifo_dev_common.event.fifo_event_queue_serial import (
+    FifoEventQueueSerialAsyncClient,
+)
+from fifo_dev_common.event.fifo_event_queue_connector_handler import (
+    FifoEventQueueConnectorAsyncHandlerCID,
 )
 from fifo_dev_common.serialization.fifo_serialization import serializable
 from fifo_dev_common.event.fifo_event_protocols import SendStatus
@@ -193,6 +196,35 @@ async def test_client_server_roundtrip(use_tls: bool, unused_tcp_port: int):
 
 
 @pytest.mark.asyncio
+async def test_serial_client_uses_connector_base(unused_tcp_port: int):
+    host = "127.0.0.1"
+    port = unused_tcp_port
+
+    server_task = asyncio.create_task(
+        FifoEventQueueNetworkAsyncServer.accept(host, port)
+    )
+    await asyncio.sleep(0.01)
+
+    reader, writer = await asyncio.open_connection(host, port)
+    client = FifoEventQueueSerialAsyncClient(reader, writer, None)
+    server = await server_task
+
+    await client.send(DummyEvent(value=1))
+    recv = await server._out_queue.get()
+    assert isinstance(recv, DummyEvent)
+    assert recv.value == 1
+
+    await server.send(DummyEvent(value=2))
+    recv = await client._out_queue.get()
+    assert isinstance(recv, DummyEvent)
+    assert recv.value == 2
+
+    await client.stop()
+    await server.stop()
+    await asyncio.gather(client.join(), server.join())
+
+
+@pytest.mark.asyncio
 async def test_ensure_ssl_ctx_without_context_raises(unused_tcp_port: int):
     host = "127.0.0.1"
     port = unused_tcp_port
@@ -212,7 +244,7 @@ async def test_cid_handler_consumes_event(unused_tcp_port: int):
     )
     await asyncio.sleep(0.01)
 
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     client = await FifoEventQueueNetworkAsyncClient.connect(host, port, handler=handler)
     server = await server_task
 
@@ -252,7 +284,7 @@ async def test_cid_handler_on_send_callback_invoked(unused_tcp_port: int):
     )
     await asyncio.sleep(0.01)
 
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     client = await FifoEventQueueNetworkAsyncClient.connect(host, port, handler=handler)
     server = await server_task
 
@@ -299,7 +331,7 @@ async def test_cid_handler_on_sent_callback_invoked(unused_tcp_port: int):
     )
     await asyncio.sleep(0.01)
 
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     client = await FifoEventQueueNetworkAsyncClient.connect(host, port, handler=handler)
     server = await server_task
 
@@ -341,9 +373,9 @@ async def test_handler_logs_on_sent_callback_failure(caplog: pytest.LogCaptureFi
     import logging
 
     # Capture error logs from the handler module
-    caplog.set_level(logging.ERROR, logger="fifo_dev_common.event.fifo_event_queue_network_handler")
+    caplog.set_level(logging.ERROR, logger="fifo_dev_common.event.fifo_event_queue_connector_handler")
 
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
 
     async def on_sent_raises(_ev: FifoEvent) -> None:
         # Raise a whitelisted exception to trigger the error log path
@@ -377,9 +409,9 @@ async def test_handler_logs_on_callback_failure(caplog: pytest.LogCaptureFixture
     import logging
 
     # Capture error logs from the handler module
-    caplog.set_level(logging.ERROR, logger="fifo_dev_common.event.fifo_event_queue_network_handler")
+    caplog.set_level(logging.ERROR, logger="fifo_dev_common.event.fifo_event_queue_connector_handler")
 
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
 
     async def on_send_raises(_ev: FifoEvent) -> None:
         # Raise a whitelisted exception to trigger the error log path
@@ -416,7 +448,7 @@ async def test_cid_handler_chain_consumes_events(unused_tcp_port: int):
     )
     await asyncio.sleep(0.01)
 
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     client = await FifoEventQueueNetworkAsyncClient.connect(host, port, handler=handler)
     server = await server_task
 
@@ -465,7 +497,7 @@ async def test_cid_handler_chain_stops_on_failure(unused_tcp_port: int):
     )
     await asyncio.sleep(0.01)
 
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     client = await FifoEventQueueNetworkAsyncClient.connect(host, port, handler=handler)
     server = await server_task
 

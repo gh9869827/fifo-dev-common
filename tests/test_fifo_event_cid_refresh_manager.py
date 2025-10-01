@@ -18,8 +18,8 @@ from fifo_dev_common.event.fifo_event_cid_outcome import FifoEventCIDOutcome
 from fifo_dev_common.event.fifo_event_cid_request_manager import (
     FifoEventCIDRefreshManager,
 )
-from fifo_dev_common.event.fifo_event_queue_network_handler import (
-    FifoEventQueueNetworkAsyncHandlerCID,
+from fifo_dev_common.event.fifo_event_queue_connector_handler import (
+    FifoEventQueueConnectorAsyncHandlerCID,
 )
 from fifo_dev_common.state.fifo_refreshable_value import FifoRefreshableValue, CacheState
 from fifo_dev_common.serialization.fifo_serialization import serializable
@@ -69,7 +69,7 @@ class Done(FifoEventResultWithCID):
 
 @pytest.mark.asyncio
 async def test_refresh_manager_updates_cache():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     mgr = FifoEventCIDRefreshManager(handler)
 
     cache: FifoRefreshableValue[int] = FifoRefreshableValue()
@@ -79,7 +79,7 @@ async def test_refresh_manager_updates_cache():
 
     # Minimal transport to trigger template auto-registration
     class _Transport:
-        def __init__(self, h: FifoEventQueueNetworkAsyncHandlerCID) -> None:
+        def __init__(self, h: FifoEventQueueConnectorAsyncHandlerCID) -> None:
             self.h = h
 
         async def put(self, item: FifoEvent) -> None:
@@ -135,7 +135,7 @@ async def test_refresh_manager_updates_cache():
 
 @pytest.mark.asyncio
 async def test_refresh_manager_optional_on_outcome_called_success_and_failure():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     mgr = FifoEventCIDRefreshManager(handler)
 
     cache: FifoRefreshableValue[int] = FifoRefreshableValue()
@@ -150,7 +150,7 @@ async def test_refresh_manager_optional_on_outcome_called_success_and_failure():
     mgr.register(Rq, [Ack, Done], cache, extract=lambda ev: ev.value, success_types=(Done,), on_done=on_done)  # type: ignore
 
     class _Transport:
-        def __init__(self, h: FifoEventQueueNetworkAsyncHandlerCID) -> None:
+        def __init__(self, h: FifoEventQueueConnectorAsyncHandlerCID) -> None:
             self.h = h
 
         async def put(self, item: FifoEvent) -> None:

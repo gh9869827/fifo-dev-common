@@ -11,18 +11,20 @@ Asyncio-based TCP transport for `FifoEvent` objects, with optional TLS 1.3 encry
 """
 
 import asyncio
-import threading
 import contextlib
 import ssl
 import hashlib
 from typing import Optional, Sequence, cast
-from fifo_dev_common.event.fifo_event import (
-    FifoEvent,
-    FifoEventShutdown,
-)
+
+from fifo_dev_common.event.fifo_event import FifoEvent
 from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut, SendStatus
-from fifo_dev_common.event.fifo_event_queue_network_handler import (
-    FifoEventQueueNetworkAsyncHandlerBase,
+from fifo_dev_common.event.fifo_event_queue_connector import (
+    FifoEventQueueConnectorAsyncClient,
+    _FifoEventQueueConnectorAsyncMixin,
+    _bounded_close_and_wait_closed_writer,
+)
+from fifo_dev_common.event.fifo_event_queue_connector_handler import (
+    FifoEventQueueConnectorAsyncHandlerBase,
 )
 from fifo_dev_common.logging.logger import get_logger
 
@@ -118,46 +120,6 @@ def make_client_tls_context(cafile: str,
         ctx.load_cert_chain(certfile=certfile, keyfile=keyfile)
 
     return ctx
-
-
-# ---------- helpers (close/wait bounded, no broad except) ----------
-
-async def _bounded_close_and_wait_closed_writer(writer: asyncio.StreamWriter,
-                                                *,
-                                                timeout: float,
-                                                label: str) -> None:
-    """
-    Close an asyncio StreamWriter and wait for it to finish closing with timeout protection.
-
-    This function performs a graceful shutdown of a StreamWriter by calling close() and then
-    waiting for wait_closed() to complete. It includes timeout protection and logs only
-    benign connection errors that commonly occur during shutdown.
-
-    Args:
-        writer (asyncio.StreamWriter):
-            The asyncio StreamWriter to close and wait for.
-
-        timeout (float):
-            Maximum time in seconds to wait for the writer to close completely.
-
-        label (str):
-            A label for logging purposes to identify which connection is being closed.
-
-    Raises:
-        No exceptions are raised; all errors are logged and the function proceeds.
-    """
-    peer: tuple[str, int] | None = writer.get_extra_info("peername")
-    writer.close()
-    try:
-        await asyncio.wait_for(writer.wait_closed(), timeout=timeout)
-    except asyncio.TimeoutError:
-        logger.warning(
-            "[%s] wait_closed() timed out after %.1fs (peer=%s); proceeding.", label, timeout, peer
-        )
-    except (BrokenPipeError, ConnectionResetError) as e:
-        logger.debug(
-            "[%s] wait_closed() benign socket error: %r (peer=%s); proceeding.", label, e, peer
-        )
 
 
 async def _bounded_wait_closed_server(server: asyncio.base_events.Server,
@@ -298,167 +260,7 @@ def _log_tls_peer(writer: asyncio.StreamWriter, role: str) -> None:
     logger.info("[%s] TLS peer: CN=%s, fpSHA256=%s, notAfter=%s, issuer=%s",
                 role, cn or "?", fp or "?", not_after or "?", issuer or "?")
 
-
-# -----------------------------------
-# Base mixin for common functionality
-# -----------------------------------
-
-
-class _FifoEventQueueNetworkAsyncMixin:
-    """
-    Mixin class providing common functionality for both client and server network classes.
-    
-    This mixin contains shared methods for sending events, receiving events, and stopping
-    the network connection. It assumes the inheriting class has _reader, _writer, _out_queue,
-    and _task attributes. A `_handler` attribute may optionally be provided to process
-    incoming events before they are queued.
-    """
-    _reader: asyncio.StreamReader
-    _writer: asyncio.StreamWriter
-    _out_queue: asyncio.PriorityQueue[FifoEvent]
-    _task: asyncio.Task[None]
-    _handler: FifoEventQueueNetworkAsyncHandlerBase | None
-
-    async def stop(self):
-        """
-        Signal the connection to stop by sending a shutdown event.
-
-        This method sends a FifoEventShutdown event which will cause the background
-        network-to-queue task to terminate after processing the shutdown signal.
-        Call join() after this method to wait for the actual shutdown to complete.
-
-        Raises:
-            ConnectionError: If the connection is already closed or there's a network error.
-        """
-        await self.send(FifoEventShutdown())
-
-    async def _network_to_queue(self):
-        """
-        Background task that continuously receives events from the network and enqueues them.
-
-        This method runs in a background asyncio task and continuously deserializes events
-        from the network stream. If a handler is configured, incoming events are processed
-        through the handler's process_incoming_event() method, which may modify or suppress
-        them. Only non-None events are placed into the output queue. The task terminates when
-        a FifoEventShutdown event is received.
-
-        Note:
-            When a FifoEventShutdown is received, process_incoming_event() is still invoked so the
-            handler can observe it, but its return value is ignored. The original shutdown event is
-            always enqueued exactly once.
-
-        Handler errors are logged; the failing event is discarded (except shutdown, which still
-        propagates).
-
-        Raises:
-            ConnectionError: If the network connection is lost during operation.
-        """
-        while True:
-            try:
-                event = await FifoEvent.deserialize_from_stream_async(self._reader)
-            except (RuntimeError, TypeError, ValueError) as e:
-                role = "client" if "Client" in type(self).__name__ else "server"
-                logger.error("[%s] Error receiving event: %r", role, type(e))
-                continue
-
-            if self._handler is not None:
-                try:
-                    event_to_enqueue = await self._handler.process_incoming_event(event)
-                except Exception: # pylint: disable=broad-exception-caught
-                    # Broad exception to catch handler errors so a faulty callback can't break the
-                    # receive background pipeline.
-                    role = "client" if "Client" in type(self).__name__ else "server"
-                    logger.error("[%s] process_incoming_event handler failed. Discarding event.",
-                                 role)
-                    event_to_enqueue = None
-
-                if not isinstance(event, FifoEventShutdown):
-                    if event_to_enqueue is None:
-                        continue
-                    event = event_to_enqueue
-
-            await self._out_queue.put(event)
-            if isinstance(event, FifoEventShutdown):
-                break
-
-    async def send(self, event: FifoEvent) -> SendStatus:
-        """
-        Send a FifoEvent over the network connection.
-
-        This method processes the event through the handler's process_outgoing_event() method (if a
-        handler is configured), which may modify or suppress the event. If the handler returns a
-        non-None event, it is serialized and sent over the network connection. The event is
-        automatically flushed to ensure delivery.
-
-        If the write completes without raising an exception, the handler's `process_sent_event()`
-        method is invoked (if configured) with the event that has been successfully sent.
-
-        Note:
-            When a FifoEventShutdown is sent, process_outgoing_event() is still invoked so the
-            handler can observe it, but its return value is ignored. The original shutdown event is
-            always sent instead of the return value.
-
-        Handler errors are logged; the failing event is discarded (except shutdown, which is still
-        sent).
-
-        Args:
-            event (FifoEvent):
-                The event to send over the network connection.
-
-        Returns:
-            SendStatus:
-                `SendStatus.SENT` if the event was written (or shutdown propagated).
-                `SendStatus.SUPPRESSED` if the handler suppressed the event (returned None for a
-                non-shutdown event) or if a handler hook failed and the event was discarded.
-
-        Raises:
-            ConnectionError: If the connection is closed or a network error occurs.
-        """
-        if self._handler is not None:
-            try:
-                event_to_send = await self._handler.process_outgoing_event(event)
-            except Exception: # pylint: disable=broad-exception-caught
-                # Broad exception to catch handler errors so a faulty callback can't break the send
-                # pipeline; the event is discarded and treated as suppressed.
-                role = "client" if "Client" in type(self).__name__ else "server"
-                logger.error("[%s] process_outgoing_event handler failed. Discarding event.", role)
-                event_to_send = None
-
-            if not isinstance(event, FifoEventShutdown):
-                if event_to_send is None:
-                    return SendStatus.SUPPRESSED
-                event = event_to_send
-
-        await event.serialize_to_stream_async(self._writer)  # drain handled by serializer
-
-        if self._handler is not None:
-            try:
-                await self._handler.process_sent_event(event)
-            except Exception: # pylint: disable=broad-exception-caught
-                # Broad exception to catch handler errors so a faulty callback can't break the send
-                # pipeline.
-                role = "client" if "Client" in type(self).__name__ else "server"
-                logger.error("[%s] process_sent_event handler failed.", role)
-
-        return SendStatus.SENT
-
-    async def put(self, item: FifoEvent) -> None:
-        """
-        Queue-like alias for send.
-
-        Provides compatibility with asyncio.PriorityQueue.put so that network
-        clients and servers can be used interchangeably with asyncio queues
-        expecting a put method.
-
-        Args:
-            item (FifoEvent):
-                Event to send over the network connection.
-        """
-
-        await self.send(item)
-
-
-class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, SupportsFifoEventPut):
+class FifoEventQueueNetworkAsyncClient(FifoEventQueueConnectorAsyncClient):
     """
     Asyncio-based network client for sending and receiving FifoEvent objects over TCP.
 
@@ -485,14 +287,11 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
             Priority queue containing received events from the network, ready for
             application consumption.
 
-        _thread (threading.Thread):
-            Currently unused thread attribute (legacy).
-
         _task (asyncio.Task[None]):
             Background asyncio task that continuously receives events from the network
             and places them in the output queue.
 
-        _handler (FifoEventQueueNetworkAsyncHandlerBase | None):
+        _handler (FifoEventQueueConnectorAsyncHandlerBase | None):
             Handler used to intercept and process events. If None, events are
             queued and sent directly without additional processing. When provided,
             the handler can:
@@ -503,15 +302,14 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
     _reader: asyncio.StreamReader
     _writer: asyncio.StreamWriter
     _out_queue: asyncio.PriorityQueue[FifoEvent]
-    _thread: threading.Thread
     _task: asyncio.Task[None]
-    _handler: FifoEventQueueNetworkAsyncHandlerBase | None
+    _handler: FifoEventQueueConnectorAsyncHandlerBase | None
 
     def __init__(self,
                  reader: asyncio.StreamReader,
                  writer: asyncio.StreamWriter,
                  out_queue: asyncio.PriorityQueue[FifoEvent] | None,
-                 handler: FifoEventQueueNetworkAsyncHandlerBase | None = None):
+                 handler: FifoEventQueueConnectorAsyncHandlerBase | None = None):
         """
         Initialize a FifoEventQueueNetworkAsyncClient with existing connection streams.
 
@@ -525,7 +323,7 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
             out_queue (asyncio.PriorityQueue[FifoEvent] | None):
                 Optional priority queue for received events. If None, a new queue is created.
 
-            handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
+            handler (FifoEventQueueConnectorAsyncHandlerBase | None, optional):
                 Handler used to intercept and process events. If None, events are
                 queued and sent directly without additional processing. When provided,
                 the handler can:
@@ -533,18 +331,14 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
                 - process outgoing events before they are sent, and
                 - observe sent events after they have been successfully sent.
         """
-        self._reader = reader
-        self._writer = writer
-        self._out_queue = out_queue or asyncio.PriorityQueue()
-        self._handler = handler
-        self._task = asyncio.create_task(self._network_to_queue())
+        super().__init__(reader, writer, out_queue, handler)
 
     @classmethod
     async def connect(cls,
                       host: str,
                       port: int,
                       out_queue: asyncio.PriorityQueue[FifoEvent] | None = None,
-                      handler: FifoEventQueueNetworkAsyncHandlerBase | None = None,
+                      handler: FifoEventQueueConnectorAsyncHandlerBase | None = None,
                       *,
                       ssl_ctx: ssl.SSLContext | None = None,
                       server_hostname: str | None = None,
@@ -568,7 +362,7 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
             out_queue (asyncio.PriorityQueue[FifoEvent] | None, optional):
                 Optional priority queue for received events. If None, a new queue is created.
 
-            handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
+            handler (FifoEventQueueConnectorAsyncHandlerBase | None, optional):
                 Handler used to intercept and process events. If None, events are
                 queued and sent directly without additional processing. When provided,
                 the handler can:
@@ -644,37 +438,11 @@ class FifoEventQueueNetworkAsyncClient(_FifoEventQueueNetworkAsyncMixin, Support
 
         return cls(reader, writer, out_queue, handler)
 
-    async def join(self, timeout: float = 5.0):
-        """
-        Wait for the client to finish shutting down and clean up resources.
 
-        This method waits for the background network-to-queue task to finish, then
-        properly closes the network connection. It includes timeout protection to
-        prevent hanging during shutdown.
-
-        Args:
-            timeout (float, optional):
-                Maximum time in seconds to wait for the background task to finish.
-                Defaults to 5.0 seconds.
-
-        Raises:
-            No exceptions are raised; timeouts and errors are logged and handled gracefully.
-        """
-        # Wait for `_network_to_queue` task to finish, cancel on timeout
-        try:
-            await asyncio.wait_for(self._task, timeout=timeout)
-        except asyncio.TimeoutError:
-            logger.warning("[client] join() timed out after %.1fs; cancelling background task.",
-                           timeout)
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
-
-        # Close writer with a bounded wait
-        await _bounded_close_and_wait_closed_writer(self._writer, timeout=3.0, label="client")
-
-
-class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, SupportsFifoEventPut):
+class FifoEventQueueNetworkAsyncServer(
+    _FifoEventQueueConnectorAsyncMixin,
+    SupportsFifoEventPut,
+):
     """
     Asyncio-based network server for sending and receiving FifoEvent objects over TCP.
 
@@ -709,7 +477,7 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
             Background asyncio task that continuously receives events from the client
             and places them in the output queue.
 
-        _handler (FifoEventQueueNetworkAsyncHandlerBase | None):
+        _handler (FifoEventQueueConnectorAsyncHandlerBase | None):
             Handler used to intercept and process events. If None, events are
             queued and sent directly without additional processing. When provided,
             the handler can:
@@ -722,14 +490,14 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
     _server: asyncio.Server
     _out_queue: asyncio.PriorityQueue[FifoEvent]
     _task: asyncio.Task[None]
-    _handler: FifoEventQueueNetworkAsyncHandlerBase | None
+    _handler: FifoEventQueueConnectorAsyncHandlerBase | None
 
     def __init__(self,
                  reader: asyncio.StreamReader,
                  writer: asyncio.StreamWriter,
                  server: asyncio.Server,
                  out_queue: asyncio.PriorityQueue[FifoEvent] | None,
-                 handler: FifoEventQueueNetworkAsyncHandlerBase | None = None):
+                 handler: FifoEventQueueConnectorAsyncHandlerBase | None = None):
         """
         Initialize a FifoEventQueueNetworkAsyncServer with existing connection and server.
 
@@ -746,7 +514,7 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
             out_queue (asyncio.PriorityQueue[FifoEvent] | None):
                 Optional priority queue for received events. If None, a new queue is created.
 
-            handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
+            handler (FifoEventQueueConnectorAsyncHandlerBase | None, optional):
                 Handler used to intercept and process events. If None, events are
                 queued and sent directly without additional processing. When provided,
                 the handler can:
@@ -766,7 +534,7 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
                      host: str,
                      port: int,
                      out_queue: asyncio.PriorityQueue[FifoEvent] | None = None,
-                     handler: FifoEventQueueNetworkAsyncHandlerBase | None = None,
+                     handler: FifoEventQueueConnectorAsyncHandlerBase | None = None,
                      *,
                      ssl_ctx: ssl.SSLContext | None = None,
                      ensure_ssl_ctx: bool = False):
@@ -789,7 +557,7 @@ class FifoEventQueueNetworkAsyncServer(_FifoEventQueueNetworkAsyncMixin, Support
             out_queue (asyncio.PriorityQueue[FifoEvent] | None, optional):
                 Optional priority queue for received events. If None, a new queue is created.
 
-            handler (FifoEventQueueNetworkAsyncHandlerBase | None, optional):
+            handler (FifoEventQueueConnectorAsyncHandlerBase | None, optional):
                 Handler used to intercept and process events. If None, events are
                 queued and sent directly without additional processing. When provided,
                 the handler can:

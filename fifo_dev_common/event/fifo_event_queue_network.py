@@ -355,7 +355,7 @@ class _FifoEventQueueNetworkAsyncMixin:
         """
         while True:
             try:
-                event = await FifoEvent.deserialize_from_socket_async(self._reader)
+                event = await FifoEvent.deserialize_from_stream_async(self._reader)
             except (RuntimeError, TypeError, ValueError) as e:
                 role = "client" if "Client" in type(self).__name__ else "server"
                 logger.error("[%s] Error receiving event: %r", role, type(e))
@@ -429,7 +429,7 @@ class _FifoEventQueueNetworkAsyncMixin:
                     return SendStatus.SUPPRESSED
                 event = event_to_send
 
-        await event.serialize_to_socket_async(self._writer)  # drain handled by serializer
+        await event.serialize_to_stream_async(self._writer)  # drain handled by serializer
 
         if self._handler is not None:
             try:

@@ -217,7 +217,7 @@ class FifoEvent(FifoSerializable):
             raise RuntimeError("Invalid number of bytes written to serial connection")
         serial.flush()
 
-    async def serialize_to_socket_async(self, sock: asyncio.StreamWriter):
+    async def serialize_to_stream_async(self, stream: asyncio.StreamWriter):
         """
         Serialize the event and send it over the given asyncio stream writer with a 4-byte length
         prefix. Automatically flushes the stream.
@@ -227,14 +227,15 @@ class FifoEvent(FifoSerializable):
 
         This method computes the serialized byte size, allocates a single buffer,
         writes the total message length and event ID, serializes the payload, and
-        sends the entire buffer using `writer.write()` followed by `await writer.drain()`.
+        sends the entire buffer using `stream.write()` followed by `await stream.drain()`.
 
         Args:
-            sock (asyncio.StreamWriter):
-                An asyncio stream writer that supports `write()` for writing bytes and `drain()`.
+            stream (asyncio.StreamWriter):
+                An asyncio stream writer (e.g. network socket or serial connection) that supports
+                `write()` for writing bytes and `drain()`.
         """
-        sock.write(self._get_serialized_buffer())
-        await sock.drain()
+        stream.write(self._get_serialized_buffer())
+        await stream.drain()
 
     @classmethod
     def from_bytes(cls, data: bytes) -> FifoEvent:
@@ -402,7 +403,7 @@ class FifoEvent(FifoSerializable):
         return cls.from_bytes(payload)
 
     @classmethod
-    async def deserialize_from_socket_async(cls, sock: asyncio.StreamReader) -> FifoEvent:
+    async def deserialize_from_stream_async(cls, stream: asyncio.StreamReader) -> FifoEvent:
         """
         Receive and deserialize a FifoEvent from the given asyncio stream reader.
 
@@ -412,8 +413,9 @@ class FifoEvent(FifoSerializable):
         event ID dispatch and constructs the appropriate subclass instance.
 
         Args:
-            sock (asyncio.StreamReader):
-                An asyncio StreamReader that supports `readexactly()` for reading exact byte counts.
+            stream (asyncio.StreamReader):
+                An asyncio StreamReader (e.g. network socket or serial connection) that supports
+                `readexactly()` for reading exact byte counts.
 
         Returns:
             FifoEvent:
@@ -426,7 +428,7 @@ class FifoEvent(FifoSerializable):
             ValueError:
                 If the event ID is unknown or the buffer is too short to decode.
         """
-        return await cls._deserialize_from_stream_async(sock.readexactly)
+        return await cls._deserialize_from_stream_async(stream.readexactly)
 
     @classmethod
     def clear_registry(cls):

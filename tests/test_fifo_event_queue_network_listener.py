@@ -11,8 +11,8 @@ from fifo_dev_common.event.fifo_event import (
     FifoEventShutdown,
     FifoEventWithCID,
 )
-from fifo_dev_common.event.fifo_event_queue_network_handler import (
-    FifoEventQueueNetworkAsyncHandlerCID,
+from fifo_dev_common.event.fifo_event_queue_connector_handler import (
+    FifoEventQueueConnectorAsyncHandlerCID,
 )
 from fifo_dev_common.serialization.fifo_serialization import serializable
 
@@ -51,7 +51,7 @@ class _DummyCID(FifoEventWithCID):
 
 @pytest.mark.asyncio
 async def test_incoming_listener_fires_for_non_cid():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     evt = asyncio.Event()
     seen: list[FifoEvent] = []
 
@@ -73,7 +73,7 @@ async def test_incoming_listener_fires_for_non_cid():
 
 @pytest.mark.asyncio
 async def test_incoming_listener_receives_shutdown():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     evt = asyncio.Event()
 
     async def on_shutdown(_ev: FifoEvent) -> None:
@@ -89,7 +89,7 @@ async def test_incoming_listener_receives_shutdown():
 
 @pytest.mark.asyncio
 async def test_incoming_listener_does_not_fire_for_cid():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     evt = asyncio.Event()
 
     async def on_any(_ev: FifoEvent) -> None:
@@ -108,7 +108,7 @@ async def test_incoming_listener_does_not_fire_for_cid():
 
 @pytest.mark.asyncio
 async def test_incoming_listener_consume_suppresses_propagation():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     evt_called = asyncio.Event()
 
     async def on_event(_ev: FifoEvent) -> None:
@@ -128,7 +128,7 @@ async def test_incoming_listener_consume_suppresses_propagation():
 
 @pytest.mark.asyncio
 async def test_multiple_listeners_with_one_consumer_both_called_but_consumed():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
     called = [False, False]
 
     async def l1(_ev: FifoEvent) -> None:

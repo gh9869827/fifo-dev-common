@@ -15,8 +15,8 @@ from fifo_dev_common.event.fifo_event import (
     EErrorCode,
 )
 from fifo_dev_common.event.fifo_event_cid_outcome import FifoEventCIDOutcome
-from fifo_dev_common.event.fifo_event_queue_network_handler import (
-    FifoEventQueueNetworkAsyncHandlerCID,
+from fifo_dev_common.event.fifo_event_queue_connector_handler import (
+    FifoEventQueueConnectorAsyncHandlerCID,
 )
 from fifo_dev_common.serialization.fifo_serialization import serializable
 
@@ -65,7 +65,7 @@ class DummyDoneSuccess(FifoEventResultWithCID):
 
 @pytest.mark.asyncio
 async def test_background_manager_success_and_failure():
-    handler = FifoEventQueueNetworkAsyncHandlerCID()
+    handler = FifoEventQueueConnectorAsyncHandlerCID()
 
     outcomes: list[tuple[FifoEventCIDOutcome[FifoEvent, FifoEventResultWithCID], FifoEventWithCID]] = []
     called = asyncio.Event()
@@ -81,7 +81,7 @@ async def test_background_manager_success_and_failure():
 
     # Minimal transport that only triggers template auto-registration
     class _Transport:
-        def __init__(self, h: FifoEventQueueNetworkAsyncHandlerCID) -> None:
+        def __init__(self, h: FifoEventQueueConnectorAsyncHandlerCID) -> None:
             self.h = h
 
         async def put(self, item: FifoEvent) -> None:

@@ -55,16 +55,16 @@ OnDoneCallback: TypeAlias = Callable[
     Awaitable[None]
 ]
 
-class FifoEventQueueNetworkAsyncHandlerBase(ABC):
+class FifoEventQueueConnectorAsyncHandlerBase(ABC):
     """
-    Base class for asynchronous network event handlers.
+    Base class for asynchronous connector event handlers.
 
     Handlers can intercept and process events in three phases:
 
-    - Incoming events (from the network, before enqueuing):
+    - Incoming events (from the connector, before enqueuing):
       Return the event (possibly modified) to enqueue, or None to suppress.
 
-    - Outgoing events (before sending to the network):
+    - Outgoing events (before sending to the connector):
       Return the event (possibly modified) to send, or None to suppress sending.
 
     - Sent events (after the event has been successfully written and flushed):
@@ -87,12 +87,12 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
         """
         Process an incoming event before it is enqueued.
 
-        Called when an event is received from the network and before it is added to the 
+        Called when an event is received from the connector and before it is added to the
         outgoing queue.
 
         Args:
             event (FifoEvent):
-                Incoming event from the network.
+                Incoming event from the connector.
 
         Returns:
             FifoEvent | None:
@@ -103,13 +103,13 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
     @abstractmethod
     async def process_outgoing_event(self, event: FifoEvent) -> FifoEvent | None:
         """
-        Process an outgoing event before it is sent over the network.
+        Process an outgoing event before it is sent over the connector.
 
-        Called when an event is about to be serialized and written to the network.
+        Called when an event is about to be serialized and written to the connector.
 
         Args:
             event (FifoEvent):
-                Outgoing event to be sent over the network.
+                Outgoing event to be sent over the connector.
 
         Returns:
             FifoEvent | None:
@@ -120,7 +120,7 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
     @abstractmethod
     async def process_sent_event(self, event: FifoEvent) -> None:
         """
-        Called after an outgoing event has been successfully sent over the network.
+        Called after an outgoing event has been successfully sent over the connector.
 
         Implementations can perform post-send bookkeeping (logging, metrics,
         triggering side-effects, etc.). This hook is for notification only and
@@ -133,7 +133,7 @@ class FifoEventQueueNetworkAsyncHandlerBase(ABC):
         raise NotImplementedError  # pragma: no cover
 
 
-class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase):
+class FifoEventQueueConnectorAsyncHandlerCID(FifoEventQueueConnectorAsyncHandlerBase):
     """
     Correlation ID-based event handler for managing request/response workflows.
 
@@ -156,7 +156,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
 
     Example:
         ```python
-        handler = FifoEventQueueNetworkAsyncHandlerCID()
+        handler = FifoEventQueueConnectorAsyncHandlerCID()
 
         # 1) Define the contract once at startup
         async def on_ok(ev: FifoEventWithCID | FifoEventResultWithCID) -> None: ...
@@ -177,7 +177,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
     Thread Safety:
         This handler is thread-safe and designed for concurrent use in asyncio environments.
         Callbacks are executed sequentially on a dedicated background task to prevent
-        blocking the network reader.
+        blocking the connector reader.
     """
 
     class QueueItemKind(Enum):
@@ -279,22 +279,22 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             try:
                 if kind is self.QueueItemKind.SEND:
                     cb, ev = cast(
-                        FifoEventQueueNetworkAsyncHandlerCID.QueuePayloadSend, payload
+                        FifoEventQueueConnectorAsyncHandlerCID.QueuePayloadSend, payload
                     )
                     await cb(ev)
                 elif kind is self.QueueItemKind.SENT:
                     cb, ev = cast(
-                        FifoEventQueueNetworkAsyncHandlerCID.QueuePayloadSent, payload
+                        FifoEventQueueConnectorAsyncHandlerCID.QueuePayloadSent, payload
                     )
                     await cb(ev)
                 elif kind is self.QueueItemKind.OUTCOME:
                     cb_outcome, outcome, req = cast(
-                        FifoEventQueueNetworkAsyncHandlerCID.QueuePayloadOutcome, payload
+                        FifoEventQueueConnectorAsyncHandlerCID.QueuePayloadOutcome, payload
                     )
                     await cb_outcome(outcome, req)
                 elif kind is self.QueueItemKind.LISTENER:
                     cb_listener, ev_any = cast(
-                        FifoEventQueueNetworkAsyncHandlerCID.QueuePayloadListener, payload
+                        FifoEventQueueConnectorAsyncHandlerCID.QueuePayloadListener, payload
                     )
                     await cb_listener(ev_any)
                 else:  # pragma: no cover - defensive branch
@@ -494,7 +494,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
 
         Args:
             event (FifoEvent):
-                Outgoing event to be sent over the network.
+                Outgoing event to be sent over the connector.
 
         Returns:
             FifoEvent | None:
@@ -508,7 +508,7 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
             return event
 
         # Find a template for this event class (supporting inheritance chains)
-        template: FifoEventQueueNetworkAsyncHandlerCID.TemplateContent | None = None
+        template: FifoEventQueueConnectorAsyncHandlerCID.TemplateContent | None = None
         for cls in type(event).mro():  # search MRO for a registered base class
             if cls in self._templates:
                 template = self._templates[cls]
@@ -538,10 +538,10 @@ class FifoEventQueueNetworkAsyncHandlerCID(FifoEventQueueNetworkAsyncHandlerBase
 
     async def process_sent_event(self, event: FifoEvent) -> None:
         """
-        Observe an event after it has been successfully sent over the network.
+        Observe an event after it has been successfully sent over the connector.
 
         This hook mirrors `process_outgoing_event()` but runs only after the
-        event was written and flushed on the socket. For CID-capable events that
+        event was written and flushed on the transport. For CID-capable events that
         match a registered template, it schedules the optional `on_sent`
         callback on the internal dispatcher task.
 

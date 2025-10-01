@@ -9,8 +9,8 @@ from fifo_dev_common.event.fifo_event import (
     FifoEventWithCID,
     FifoEventResultWithCID,
 )
-from fifo_dev_common.event.fifo_event_queue_network_handler import (
-    FifoEventQueueNetworkAsyncHandlerCID,
+from fifo_dev_common.event.fifo_event_queue_connector_handler import (
+    FifoEventQueueConnectorAsyncHandlerCID,
     ExpectedEventClasses,
 )
 from fifo_dev_common.state.fifo_refreshable_value import FifoRefreshableValue
@@ -39,19 +39,19 @@ class FifoEventCIDRefreshManager:
     cache updates.
 
     Args:
-        handler (FifoEventQueueNetworkAsyncHandlerCID):
+        handler (FifoEventQueueConnectorAsyncHandlerCID):
             CID-capable handler that manages per-CID stage tracking and executes the
             registered success/failure callbacks.
     """
 
-    _handler: FifoEventQueueNetworkAsyncHandlerCID
+    _handler: FifoEventQueueConnectorAsyncHandlerCID
 
-    def __init__(self, handler: FifoEventQueueNetworkAsyncHandlerCID) -> None:
+    def __init__(self, handler: FifoEventQueueConnectorAsyncHandlerCID) -> None:
         """
         Initialize a refresh manager bound to a CID-aware handler.
 
         Args:
-            handler (FifoEventQueueNetworkAsyncHandlerCID):
+            handler (FifoEventQueueConnectorAsyncHandlerCID):
                 CID-capable handler that manages per-CID stage tracking and executes the
                 registered success/failure callbacks.
         """

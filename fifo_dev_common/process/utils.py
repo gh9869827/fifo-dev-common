@@ -765,7 +765,8 @@ class FifoProcessManager:
 
         _async_out (SupportsFifoEventPut):
             Object to receive outgoing events from the main process, such as an asyncio
-            priority queue or a `FifoEventQueueNetworkAsyncServer/Client`.
+            priority queue, a `FifoEventQueueConnectorAsyncClient`, or a
+            `FifoEventQueueNetworkAsyncServer`.
 
         _lock_cid (asyncio.Lock):
             Lock used to protect concurrent access to the `_received_cid` dictionary from multiple
@@ -811,7 +812,8 @@ class FifoProcessManager:
 
             async_out (SupportsFifoEventPut):
                 Object to receive outgoing events from the main process, such as an asyncio
-                priority queue or a `FifoEventQueueNetworkAsyncServer/Client`.
+                priority queue, a `FifoEventQueueConnectorAsyncClient`, or a
+                `FifoEventQueueNetworkAsyncServer`.
         """
         self._loop = loop
 

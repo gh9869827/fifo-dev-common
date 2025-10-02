@@ -221,6 +221,15 @@ public:
     void write_array_primitive_integer(const std::vector<T>& vec);
 
     /**
+     * @brief Writes a fixed-size array of primitive integers without a count prefix
+     * @tparam T Must be a primitive integer type
+     * @tparam N Number of elements in the array
+     * @param arr The array of integers to write
+     */
+    template<typename T, std::size_t N>
+    void write_fixed_array_primitive_integer(const std::array<T, N>& arr);
+
+    /**
      * @brief Writes a nested object by calling its serialize method
      * @tparam T Object type must have serialize(FifoBuffer&) method
      * @param obj The object to serialize
@@ -378,6 +387,16 @@ public:
      */
     template<typename T>
     bool read_array_primitive_integer(std::vector<T>& out);
+
+    /**
+     * @brief Reads a fixed-size array of primitive integers without a count prefix
+     * @tparam T Must be a primitive integer type
+     * @tparam N Number of elements in the array
+     * @param out Output array to store the integers
+     * @return true if successful, false if not enough data
+     */
+    template<typename T, std::size_t N>
+    bool read_fixed_array_primitive_integer(std::array<T, N>& out);
 
     /**
      * @brief Reads a nested object by calling its constructor with this buffer
@@ -659,7 +678,7 @@ template<typename T>
 void FifoBuffer::write_array_primitive_integer(const std::vector<T>& vec) {
     static_assert(std::is_integral_v<T>, "T must be a primitive integer type");
     static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
-    
+
     const uint32_t len = static_cast<uint32_t>(vec.size());
     write_uint32_t(len);
 
@@ -679,6 +698,29 @@ void FifoBuffer::write_array_primitive_integer(const std::vector<T>& vec) {
 
     // Little-endian host or 1-byte elements: bulk write
     write_bytes(vec.data(), len * sizeof(T));
+}
+
+template<typename T, std::size_t N>
+void FifoBuffer::write_fixed_array_primitive_integer(const std::array<T, N>& arr) {
+    static_assert(std::is_integral_v<T>, "T must be a primitive integer type");
+    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+
+    if constexpr (N == 0) {
+        return;
+    }
+
+    if constexpr (sizeof(T) > 1) {
+        if constexpr (std::endian::native != std::endian::little) {
+            for (const auto& v : arr) {
+                const T le = host_to_little(v);  // swaps on big-endian, no-op otherwise
+                write_bytes(&le, sizeof(T));
+            }
+            return;
+        }
+    }
+
+    // Little-endian host or 1-byte elements: bulk write
+    write_bytes(arr.data(), N * sizeof(T));
 }
 
 template<typename T>
@@ -792,7 +834,7 @@ template<typename T>
 bool FifoBuffer::read_array_primitive_integer(std::vector<T>& out) {
     static_assert(std::is_integral_v<T>, "T must be a primitive integer type");
     static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
-    
+
     uint32_t len;
     if (!read_uint32_t(len) || unread_bytes_count() < len * sizeof(T)) {
         return false;
@@ -810,6 +852,34 @@ bool FifoBuffer::read_array_primitive_integer(std::vector<T>& out) {
             }
         }
     }
+    return true;
+}
+
+template<typename T, std::size_t N>
+bool FifoBuffer::read_fixed_array_primitive_integer(std::array<T, N>& out) {
+    static_assert(std::is_integral_v<T>, "T must be a primitive integer type");
+    static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+
+    constexpr std::size_t total_bytes = N * sizeof(T);
+    if (unread_bytes_count() < total_bytes) {
+        return false;
+    }
+
+    if constexpr (N == 0) {
+        return true;
+    }
+
+    std::memcpy(out.data(), buffer_unread_data(), total_bytes);
+    consume(total_bytes);
+
+    if constexpr (sizeof(T) > 1) {
+        if constexpr (std::endian::native != std::endian::little) {
+            for (auto& v : out) {
+                v = little_to_host<T>(v);
+            }
+        }
+    }
+
     return true;
 }
 

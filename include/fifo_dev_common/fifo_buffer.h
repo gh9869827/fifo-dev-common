@@ -512,6 +512,29 @@ public:
     bool send_to_socket_exact(boost::asio::ip::tcp::socket& socket);
 #endif
 
+#if defined(ARDUINO)
+    // ******************
+    //     SERIAL        *
+    // ******************
+
+    /**
+     * @brief Reads exactly nb_bytes from a serial-like source into the buffer (blocking)
+     * @param serial The serial object to read from
+     * @param nb_bytes Number of bytes to read
+     * @return true if successful, false if the serial stream timed out or failed
+     */
+    template<typename SerialLike>
+    bool append_from_serial(SerialLike& serial, std::size_t nb_bytes);
+
+    /**
+     * @brief Sends the entire unread buffer content to a serial-like sink (blocking)
+     * @param serial The serial object to write to
+     * @return true if successful, false if the serial stream timed out or failed
+     */
+    template<typename SerialLike>
+    bool send_to_serial_exact(SerialLike& serial);
+#endif
+
 private:
 
     void compact();
@@ -895,6 +918,49 @@ inline bool FifoBuffer::send_to_socket_exact(boost::asio::ip::tcp::socket& socke
     boost::system::error_code ec;
     boost::asio::write(socket, boost::asio::buffer(buffer_unread_data(), unread_bytes_count()), ec);
     return !ec;
+}
+
+#endif
+
+#if defined(ARDUINO)
+
+template<typename SerialLike>
+inline bool FifoBuffer::append_from_serial(SerialLike& serial, std::size_t nb_bytes) {
+    if (nb_bytes == 0) {
+        return true;
+    }
+    ensure_capacity(nb_bytes);
+    const auto start = _buffer.size();
+    _buffer.resize(start + nb_bytes);
+    auto* dest = reinterpret_cast<char*>(_buffer.data() + start);
+    std::size_t total_read = 0;
+    while (total_read < nb_bytes) {
+        const std::size_t just_read = serial.readBytes(dest + total_read, nb_bytes - total_read);
+        if (just_read == 0) {
+            _buffer.resize(start + total_read);
+            return false;
+        }
+        total_read += just_read;
+    }
+    return true;
+}
+
+template<typename SerialLike>
+inline bool FifoBuffer::send_to_serial_exact(SerialLike& serial) {
+    const std::size_t total = unread_bytes_count();
+    if (total == 0) {
+        return true;
+    }
+    const uint8_t* src = buffer_unread_data();
+    std::size_t total_written = 0;
+    while (total_written < total) {
+        const std::size_t just_written = serial.write(src + total_written, total - total_written);
+        if (just_written == 0) {
+            return false;
+        }
+        total_written += just_written;
+    }
+    return true;
 }
 
 #endif

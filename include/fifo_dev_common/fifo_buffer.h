@@ -177,6 +177,8 @@ public:
     //     WRITERS       *
     // ******************
 
+    /** @brief Writes a bool value to the buffer (serialized as 1 byte) */
+    void write_bool(bool v);
     /** @brief Writes a char value to the buffer */
     void write_char(char v);
     /** @brief Writes an int8_t value to the buffer */
@@ -294,6 +296,9 @@ public:
     // ******************
     //     READERS       *
     // ******************
+
+    /** @brief Reads a bool value from the buffer (deserialized from 1 byte) */
+    bool read_bool(bool& v);
 
     /**
      * @brief Reads an int8_t value from the buffer
@@ -650,6 +655,7 @@ inline bool FifoBuffer::advance_read_head(std::size_t n) {
 //     WRITERS       
 // ==================
 
+inline void FifoBuffer::write_bool(bool v) { write_uint8_t(static_cast<uint8_t>(v ? 1 : 0)); }
 inline void FifoBuffer::write_char(char v) { write_pod(v); }
 inline void FifoBuffer::write_int8_t(int8_t v) { write_pod(v); }
 inline void FifoBuffer::write_uint8_t(uint8_t v) { write_pod(v); }
@@ -795,6 +801,15 @@ inline void FifoBuffer::write_uint32_t_at(std::size_t pos, uint32_t value) {
 // ==================
 //     READERS       
 // ==================
+
+inline bool FifoBuffer::read_bool(bool& v) {
+    uint8_t raw = 0;
+    if (!read_uint8_t(raw)) {
+        return false;
+    }
+    v = raw != 0;
+    return true;
+}
 
 inline bool FifoBuffer::read_int8_t(int8_t& v) { return read_pod(v); }
 inline bool FifoBuffer::read_uint8_t(uint8_t& v) { return read_pod(v); }

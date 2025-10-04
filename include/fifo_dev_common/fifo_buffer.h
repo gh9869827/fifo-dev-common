@@ -297,7 +297,11 @@ public:
     //     READERS       *
     // ******************
 
-    /** @brief Reads a bool value from the buffer (deserialized from 1 byte) */
+    /**
+     * @brief Reads a bool value from the buffer (deserialized from 1 byte)
+     * @param v Output variable
+     * @return true if successful
+     */
     bool read_bool(bool& v);
 
     /**

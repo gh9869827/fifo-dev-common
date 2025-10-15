@@ -9,6 +9,7 @@
 #include <string>
 #include <type_traits>
 #include <vector>
+#include <stdexcept>
 
 #if defined(FIFO_DEV_COMMON_ENABLE_BOOST)
 #  include <boost/asio.hpp>

@@ -36,8 +36,8 @@ It provides the following for runtime type checks and casting, docstring parsing
 ## 📚 Table of Contents
 
 - [🎯 Project Status & Audience](#-project-status--audience)
-- [📦 Install](#-install)
-- [🧩 Modules](#-modules)
+- [🧩 Python Modules](#-python-modules)
+  - [Install](#-install)
   - [strict_cast](#fifo_dev_commontypeutilsstrict_cast)
   - [mini_docstring](#fifo_dev_commonintrospectionmini_docstring)
   - [read_only_list](#fifo_dev_commoncontainersread_onlyread_only_list)
@@ -52,6 +52,14 @@ It provides the following for runtime type checks and casting, docstring parsing
   - [fifo_process_manager](#fifo_dev_commonprocessutilsfifo_process_manager)
   - [logger](#fifo_dev_commonlogginglogger)
   - [fifo_refreshable_value](#fifo_dev_commonstatefifo_refreshable_value)
+- [📦 C++ Library](#-c-library)
+  - [Key Features](#key-features)
+  - [Requirements](#requirements)
+  - [Core API](#core-api)
+  - [Integration with Arduino](#integration-with-arduino)
+  - [Integration with Raspberry Pi (or Linux)](#integration-with-raspberry-pi-or-linux)
+  - [Cross-Language Example](#cross-language-example)
+  - [Documentation](#documentation)
 - [🧪 Tests](#-tests)
 - [📄 License](#-license)
 
@@ -72,7 +80,9 @@ No official release or pre-release has been published yet. The code is provided 
 
 ---
 
-## 📦 Install
+## 🧩 Python Modules
+
+### Install
 
 This repo is meant for local development. Install in editable mode:
 
@@ -83,8 +93,6 @@ python3 -m pip install -e .
 Python 3.10+ is required.
 
 ---
-
-## 🧩 Modules
 
 ### `fifo_dev_common.typeutils.strict_cast`
 
@@ -1070,6 +1078,207 @@ elif snap.state is CacheState.ERROR:
 
 > Readers always see either the old snapshot or the new one and never a torn or partially updated state.
 > For multiple writers across threads, funnel updates through a single owner (e.g., `loop.call_soon_threadsafe`).  
+
+---
+
+## 📦 C++ Library
+
+`fifo-dev-common\fifo_buffer.h` is a header-only C++ library for binary serialization and deserialization, fully compatible with Python's `FifoSerializable` format.
+
+### Key Features
+
+- **Cross-language compatibility**: Binary format matches Python `FifoSerializable` exactly
+- **Header-only**: No separate compilation required (see `include/fifo_dev_common/fifo_buffer.h`)
+- **Type-safe**: Template-based API with compile-time checks
+- **Memory-aware design**: Buffers grow dynamically and can be preallocated via constructor parameters to reduce allocation overhead and enable reuse
+- **Contiguous memory**: Direct access to the underlying buffer for efficient I/O operations
+- **Versatile type support**: Handles primitives, strings, arrays, optional values, nested objects, and basic read-only UUIDs
+- **I/O extensions**: Includes optional helpers for sockets (Boost.Asio) and serial communication (Arduino)
+
+### Requirements
+
+- **C++20** or later (requires `std::endian`)
+- **Optional**: Boost.Asio (for socket I/O helpers)
+- **Optional**: Arduino (for Serial communication helpers)
+
+### Core API
+
+The `FifoBuffer` class provides the main serialization interface:
+
+```cpp
+#include <fifo_buffer.h>
+
+// Writing
+FifoBuffer buf;
+buf.write_int32_t(42);
+buf.write_string("hello");
+buf.write_float(3.14f);
+
+// Reading
+int32_t value;
+std::string text;
+float pi;
+if (buf.read_int32_t(value) &&
+    buf.read_string(text) &&
+    buf.read_float(pi)) {
+    // Success
+}
+
+// Custom objects implement serialize() and a constructor taking FifoBuffer&
+struct MyData {
+    int32_t x;
+    std::string name;
+
+    MyData(int32_t _x, const char* lpsz_name) :
+        x(_x),
+        name(lpsz_name) {}
+    
+    void serialize(FifoBuffer& buf) const {
+        buf.write_int32_t(x);
+        buf.write_string(name);
+    }
+    
+    explicit MyData(FifoBuffer& buf) {
+        if (!buf.read_int32_t(x) || !buf.read_string(name)) {
+            throw std::runtime_error("Deserialization failed");
+        }
+    }
+};
+
+// Serialize nested object
+MyData data{42, "test"};
+buf.write_nested_object(data);
+
+// Deserialize nested object
+MyData restored = buf.read_nested_object<MyData>();
+```
+
+### Integration with Arduino
+
+To use this library with Arduino:
+
+1. **Supported platforms**:
+   - **ARM Cortex-M0/M4** (e.g., Adafruit Feather M0/M4)
+   - **ESP32**
+   - **Not supported**: AVR-based boards (Arduino Uno, Nano, Mega, etc.) lack C++20 support and sufficient RAM
+
+2. **Enable C++20 in `platform.txt`**:
+   ```
+   compiler.cpp.flags=-std=gnu++2a -fexceptions
+   compiler.c.flags=-std=gnu2x
+   ```
+
+3. **Install the library**:
+   
+   **On Linux**:
+   ```bash
+   cd ~/Arduino/libraries/
+   ln -s /path/to/fifo-dev-common/include/fifo_dev_common fifo_dev_common
+   ```
+   
+   **On Windows**:
+   ```cmd
+   cd %USERPROFILE%\Documents\Arduino\libraries\
+   mklink /D fifo_dev_common C:\path\to\fifo-dev-common\include\fifo_dev_common
+   ```
+
+4. **Include in your sketch**:
+   ```cpp
+   #include <fifo_buffer.h>
+   
+   void setup() {
+       Serial.begin(115200);
+       
+       FifoBuffer buf;
+       buf.write_int32_t(42);
+       buf.write_string("Arduino");
+       
+       // Send to Python via Serial
+       Serial.write(buf.data(), buf.size());
+   }
+   ```
+
+### Integration with Raspberry Pi (or Linux)
+
+To use the C++ header-only library in your project, reference the `include` folder in your build system.
+
+**For Makefile-based projects:**
+
+1. Define the root directory of this repository:
+    ```bash
+    export FIFO_DEV_COMMON_ROOT=/path/to/fifo-dev-common
+    ```
+
+2. Add the include path to your `CXXFLAGS` or `CPPFLAGS`:
+    ```makefile
+    CXXFLAGS += -I${FIFO_DEV_COMMON_ROOT}/include/fifo_dev_common
+    ```
+
+**Example Makefile snippet:**
+```makefile
+CXXFLAGS += -I$(FIFO_DEV_COMMON_ROOT)/include/fifo_dev_common
+
+main: main.cpp
+    $(CXX) $(CXXFLAGS) -o main main.cpp
+```
+
+### Cross-Language Example
+
+**Python side:**
+```python
+from fifo_dev_common.serialization.fifo_serialization import FifoSerializable, serializable
+from dataclasses import dataclass, field
+
+@serializable
+@dataclass
+class SensorData(FifoSerializable):
+    temperature: float = field(metadata={"format": "f"})
+    humidity: float = field(metadata={"format": "f"})
+    
+data = SensorData(temperature=22.5, humidity=45.0)
+binary = data.to_bytes()
+# Send to C++ via socket/serial...
+```
+
+**C++ side:**
+```cpp
+struct SensorData {
+    float temperature;
+    float humidity;
+
+    // Default constructor for initialization
+    SensorData() : temperature(0.0f), humidity(0.0f) {}
+    
+    // Constructor with values
+    SensorData(float temp, float hum) : temperature(temp), humidity(hum) {}
+    
+    void serialize(FifoBuffer& buf) const {
+        buf.write_float(temperature);
+        buf.write_float(humidity);
+    }
+    
+    explicit SensorData(FifoBuffer& buf) {
+        if (!buf.read_float(temperature) || !buf.read_float(humidity)) {
+            throw std::runtime_error("Failed to deserialize SensorData");
+        }
+    }
+};
+
+// Receive binary data from Python...
+FifoBuffer buf;
+// ... populate buffer with received bytes ...
+SensorData data(buf);  // Deserialize
+```
+
+### Documentation
+
+See the header file `include/fifo_dev_common/fifo_buffer.h` for complete API documentation, including:
+- All supported data types and formats
+- Socket I/O helpers (with Boost.Asio)
+- Serial I/O helpers (on Arduino platforms)
+- Basic read-only UUID support (`FifoUuid`)
+- Endianness handling
+- Memory management and capacity control
 
 ---
 

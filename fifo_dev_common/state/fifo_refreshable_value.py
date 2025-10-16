@@ -37,6 +37,27 @@ class Snapshot(Generic[T]):
     value: T | None
     ts: float
 
+    def get_if_fresh(self, ttl: float | None=None) -> T | None:
+        """
+        Return the cached value if state is valid and within time-to-live.
+
+        Returns the value when the state is FRESH or REFRESHING (with data),
+        and the elapsed time since timestamp is within ttl. If ttl is None,
+        skips the timestamp check entirely.
+
+        Args:
+            ttl (float | None):
+                Time-to-live in seconds, or None to ignore timestamp.
+
+        Returns:
+            T | None:
+                The cached value if constraints met, otherwise None.
+        """
+        if self.state in [CacheState.FRESH, CacheState.REFRESHING] and self.value is not None:
+            if ttl is None or time.monotonic() - self.ts < ttl:
+                return self.value
+        return None
+
 
 class FifoRefreshableValue(Generic[T]):
     """

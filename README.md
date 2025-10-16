@@ -1044,6 +1044,9 @@ supports explicit transitions via `mark_refreshing()`, `set_success()`,
 and `set_failure()`. States are managed through a simple state machine:
 `STALE → REFRESHING → FRESH/ERROR`.
 
+The `Snapshot` provides `get_if_fresh(ttl)` for convenient value retrieval with
+automatic freshness and time-to-live validation.
+
 **Examples:**
 
 ```python
@@ -1066,6 +1069,16 @@ if snap.state is CacheState.FRESH:
     print(f"Latest value: {snap.value} at {snap.ts}")
 elif snap.state is CacheState.ERROR:
     print("Value source reported an error")
+
+# convenient value retrieval with TTL validation
+value = snap.get_if_fresh(ttl=5.0)  # None if older than 5 seconds
+if value is not None:
+    print(f"Fresh value: {value}")
+
+# or without TTL check (only state validation)
+value = snap.get_if_fresh(ttl=None)
+if value is not None:
+    print(f"Valid value: {value}")
 ```
 
 > Readers always see either the old snapshot or the new one and never a torn or partially updated state.

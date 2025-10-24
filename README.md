@@ -29,6 +29,7 @@ It provides the following for runtime type checks and casting, docstring parsing
 - `class FifoEventQueueNetworkAsyncClient` / `class FifoEventQueueNetworkAsyncServer`: Asyncio-based network communication for FifoEvent objects over TCP with optional TLS 1.3 encryption.
 - `class FifoEventQueueSerialAsyncClient`: Asyncio serial communication for environments exposing serial connections via `serial_asyncio`.
 - `class FifoEventQueueConnectorAsyncHandlerCID`: Correlation-ID request/response helpers via `register_cid_template`, `send_and_wait`, and `send_in_background`; outcomes use `FifoEventCIDOutcome`.
+- `class FifoEventRateLimiter`: Asynchronous rate limiter for FifoEvent transmission with latest-wins queuing strategy, preventing queue buildup while enforcing maximum transmission rates.
 - `class FifoProcessManager`: Manager for running workers in separate OS processes with interprocess communication. Abstracts process creation, startup, and shutdown while bridging multiprocessing queues with asyncio. Supports both async and sync worker callbacks, with correlation ID tracking for request/response workflows.
 - `get_logger()`: Returns a logger instance with `.trace()` support for fine-grained debugging. Registers a custom TRACE level and logger class.
 - `class FifoRefreshableValue`: Lock-free cache for asynchronously refreshed values with explicit state transitions and immutable snapshots.
@@ -49,6 +50,7 @@ It provides the following for runtime type checks and casting, docstring parsing
   - [fifo_event_queue_connector](#fifo_dev_commoneventfifo_event_queue_connector)
   - [fifo_event_queue_network](#fifo_dev_commoneventfifo_event_queue_network)
   - [fifo_event_queue_serial](#fifo_dev_commoneventfifo_event_queue_serial)
+  - [fifo_event_rate_limiter](#fifo_dev_commoneventfifo_event_rate_limiter)
   - [fifo_process_manager](#fifo_dev_commonprocessutilsfifo_process_manager)
   - [logger](#fifo_dev_commonlogginglogger)
   - [fifo_refreshable_value](#fifo_dev_commonstatefifo_refreshable_value)
@@ -958,6 +960,60 @@ Asyncio serial transport built on top of `serial_asyncio.open_serial_connection(
 
 - `FifoEventQueueSerialAsyncClient`: leverages the shared connector base to reuse
   the same API as the TCP client while targeting serial links.
+
+---
+
+### `fifo_dev_common.event.fifo_event_rate_limiter`
+
+Provides `FifoEventRateLimiter` for controlling the transmission rate of FifoEvent objects with a latest-wins queuing strategy.
+
+- `FifoEventRateLimiter`: Enforces a maximum transmission rate (events per second) while queuing events. When multiple events arrive faster than the rate limit allows, only the most recent event is retained, preventing queue buildup.
+- Latest-wins strategy: New events replace queued events that haven't been sent yet.
+- Special handling for `FifoEventShutdown`: When `stop_on_shutdown=True`, shutdown events cannot be replaced and trigger automatic sender termination after transmission.
+- Background task automatically manages timing and transmission.
+- Immediate shutdown: Calling `stop()` discards any remaining queued event.
+
+**Example:**
+
+```python
+import asyncio
+from fifo_dev_common.event.fifo_event_rate_limiter import FifoEventRateLimiter
+from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventKeepAlive
+
+# Assume we have a connection object that implements SupportsFifoEventSend
+# (e.g., FifoEventQueueNetworkAsyncClient)
+
+async def main():
+    # Create rate limiter with 10 events/second max rate (100ms intervals)
+    limiter = FifoEventRateLimiter(connection, max_rate=10.0)
+    
+    # Send events rapidly - only the most recent will be transmitted
+    for i in range(100):
+        limiter.send(FifoEventKeepAlive())
+        await asyncio.sleep(0.001)  # Send every 1ms
+    
+    # Due to rate limiting, only ~10 events will actually be sent
+    # (one every 100ms), with only the latest queued event transmitted
+    
+    # Clean shutdown
+    limiter.stop()
+    await limiter.join()
+
+# Auto-stop on shutdown event
+async def main_with_shutdown():
+    limiter = FifoEventRateLimiter(
+        connection,
+        max_rate=50.0,
+        stop_on_shutdown=True
+    )
+    
+    limiter.send(FifoEventKeepAlive())
+    limiter.send(FifoEventShutdown())  # Sender auto-stops after sending
+    await limiter.join()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
 
 ---
 

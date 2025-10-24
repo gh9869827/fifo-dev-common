@@ -51,7 +51,7 @@ It provides the following for runtime type checks and casting, docstring parsing
   - [fifo_event_queue_network](#fifo_dev_commoneventfifo_event_queue_network)
   - [fifo_event_queue_serial](#fifo_dev_commoneventfifo_event_queue_serial)
   - [fifo_event_rate_limiter](#fifo_dev_commoneventfifo_event_rate_limiter)
-  - [fifo_process_manager](#fifo_dev_commonprocessutilsfifo_process_manager)
+  - [fifo_process_manager](#fifo_dev_commonprocessutilsFifoProcessManager)
   - [logger](#fifo_dev_commonlogginglogger)
   - [fifo_refreshable_value](#fifo_dev_commonstatefifo_refreshable_value)
 - [📦 C++ Library](#-c-library)

@@ -19,6 +19,8 @@ from fifo_dev_common.event.fifo_event_cid_outcome import FifoEventCIDOutcome
 from fifo_dev_common.event.fifo_event_queue_network import (
     FifoEventQueueNetworkAsyncClient,
     FifoEventQueueNetworkAsyncServer,
+    FifoEventQueueNetworkAsyncHub,
+    FifoEventQueueNetworkAsyncHubClientContext,
 )
 from fifo_dev_common.event.fifo_event_queue_serial import (
     FifoEventQueueSerialAsyncClient,
@@ -193,6 +195,71 @@ async def test_client_server_roundtrip(use_tls: bool, unused_tcp_port: int):
     assert isinstance(await client._out_queue.get(), FifoEventShutdown)
 
     await asyncio.gather(client.join(), server.join())
+
+
+@pytest.mark.asyncio
+async def test_hub_handles_multiple_clients(unused_tcp_port: int):
+    host = "127.0.0.1"
+    port = unused_tcp_port
+
+    events: asyncio.Queue[tuple[int, int, int]] = asyncio.Queue()
+    broadcasts: asyncio.Queue[dict[int, SendStatus]] = asyncio.Queue()
+
+    async def on_event(event: DummyEvent,
+                       context: FifoEventQueueNetworkAsyncHubClientContext) -> None:
+        assert context.is_active
+        count = context.data.get("count", 0) + 1
+        context.data["count"] = count
+        await events.put((context.client_id, event.value, count))
+
+        if event.value == 10:
+            await context.send(DummyEvent(value=event.value + 1))
+        if event.value == 20:
+            statuses = await context.broadcast(DummyEvent(value=event.value + 2))
+            await broadcasts.put(statuses)
+
+    hub = await FifoEventQueueNetworkAsyncHub.listen(host, port, on_event)
+
+    client1 = await FifoEventQueueNetworkAsyncClient.connect(host, port)
+    client2 = await FifoEventQueueNetworkAsyncClient.connect(host, port)
+
+    await client1.put(DummyEvent(value=1))
+    await client2.put(DummyEvent(value=2))
+    await client1.put(DummyEvent(value=10))
+    await client2.put(DummyEvent(value=20))
+
+    received: list[tuple[int, int, int]] = []
+    for _ in range(4):
+        received.append(await asyncio.wait_for(events.get(), timeout=2.0))
+
+    assert (1, 1, 1) in received
+    assert (2, 2, 1) in received
+    assert (1, 10, 2) in received
+    assert (2, 20, 2) in received
+
+    reply = await asyncio.wait_for(client1._out_queue.get(), timeout=1.0)
+    assert isinstance(reply, DummyEvent)
+    assert reply.value == 11
+
+    broadcast_status = await asyncio.wait_for(broadcasts.get(), timeout=1.0)
+    assert broadcast_status == {1: SendStatus.SENT, 2: SendStatus.SENT}
+
+    broadcast_reply1 = await asyncio.wait_for(client1._out_queue.get(), timeout=1.0)
+    broadcast_reply2 = await asyncio.wait_for(client2._out_queue.get(), timeout=1.0)
+    assert isinstance(broadcast_reply1, DummyEvent)
+    assert isinstance(broadcast_reply2, DummyEvent)
+    assert broadcast_reply1.value == 22
+    assert broadcast_reply2.value == 22
+
+    await hub.stop()
+
+    shutdown1 = await asyncio.wait_for(client1._out_queue.get(), timeout=1.0)
+    shutdown2 = await asyncio.wait_for(client2._out_queue.get(), timeout=1.0)
+    assert isinstance(shutdown1, FifoEventShutdown)
+    assert isinstance(shutdown2, FifoEventShutdown)
+
+    await hub.join()
+    await asyncio.gather(client1.join(), client2.join())
 
 
 @pytest.mark.asyncio

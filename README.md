@@ -26,7 +26,7 @@ It provides the following for runtime type checks and casting, docstring parsing
 - `class FifoEvent`: Base class for binary-serializable events, with factory deserialization and class registration for cross-system use.
 - `class FifoEventQueueForwarderMpToAsync`: Bridges multiprocessing and asyncio event queues via a background thread.
 - `class FifoEventQueueConnectorAsyncClient`: Shared asyncio client helpers for stream-based transports.
-- `class FifoEventQueueNetworkAsyncClient` / `class FifoEventQueueNetworkAsyncServer`: Asyncio-based network communication for FifoEvent objects over TCP with optional TLS 1.3 encryption.
+- `class FifoEventQueueNetworkAsyncClient` / `class FifoEventQueueNetworkAsyncServer` / `class FifoEventQueueNetworkAsyncHub`: Asyncio-based network communication for FifoEvent objects over TCP with optional TLS 1.3 encryption. The hub variant multiplexes multiple clients and dispatches incoming events to callbacks with per-client context, including helpers to reply directly or broadcast to all peers.
 - `class FifoEventQueueSerialAsyncClient`: Asyncio serial communication for environments exposing serial connections via `serial_asyncio`.
 - `class FifoEventQueueConnectorAsyncHandlerCID`: Correlation-ID request/response helpers via `register_cid_template`, `send_and_wait`, and `send_in_background`; outcomes use `FifoEventCIDOutcome`.
 - `class FifoEventRateLimiter`: Asynchronous rate limiter for FifoEvent transmission with latest-wins queuing strategy, preventing queue buildup while enforcing maximum transmission rates.
@@ -856,6 +856,7 @@ encryption.
 
 - `FifoEventQueueNetworkAsyncClient`: sends events immediately; receives events in a background task and enqueues them in a local `asyncio.PriorityQueue`.
 - `FifoEventQueueNetworkAsyncServer`: accepts **exactly one** client at a time (additional clients are rejected until the connection closes); sends events immediately and receives events in a background task, enqueuing them in a local `asyncio.PriorityQueue`.
+- `FifoEventQueueNetworkAsyncHub`: accepts multiple clients concurrently and delivers incoming events to an application-supplied callback with a per-client context object (including helpers to reply directly to the originating client or broadcast to all connected clients).
 - `make_server_tls_context()` / `make_client_tls_context()`: helpers to build **TLS 1.3–only** SSL contexts.
 - Optional pre-queue async handlers to process and optionally consume incoming events; includes a built-in correlation-ID handler for acknowledgements.
 - Optional mutual TLS (mTLS): peer authentication.

@@ -14,10 +14,13 @@ import asyncio
 import contextlib
 import ssl
 import hashlib
-from typing import Optional, Sequence, cast
+import itertools
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from typing import Any, Optional, Sequence, cast
 
-from fifo_dev_common.event.fifo_event import FifoEvent
-from fifo_dev_common.event.fifo_event_protocols import SupportsFifoEventPut
+from fifo_dev_common.event.fifo_event import FifoEvent, FifoEventShutdown
+from fifo_dev_common.event.fifo_event_protocols import SendStatus, SupportsFifoEventPut
 from fifo_dev_common.event.fifo_event_queue_connector import (
     FifoEventQueueConnectorAsyncClient,
     FifoEventQueueConnectorAsyncMixin,
@@ -627,3 +630,509 @@ class FifoEventQueueNetworkAsyncServer(
 
         # Listener was closed in accept(); now wait for it to finish closing
         await _bounded_wait_closed_server(self._server, timeout=3.0)
+
+
+@dataclass(slots=True)
+class _HubClientState:
+    """Internal bookkeeping for hub client connections."""
+
+    reader: asyncio.StreamReader
+    writer: asyncio.StreamWriter
+    context: "FifoEventQueueNetworkAsyncHubClientContext"
+    send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    task: asyncio.Task[None] | None = field(init=False, default=None)
+
+
+class FifoEventQueueNetworkAsyncHubClientContext:
+    """
+    Runtime context handed to hub callbacks for each connected client.
+
+    The context exposes helpers to reply directly to the originating client,
+    broadcast events to every active client, and maintain per-client state via
+    the mutable `data` dictionary. Instances are created and managed by the
+    hub; applications should not instantiate them manually.
+
+    Attributes:
+        client_id (int):
+            Monotonic identifier assigned by the hub when the client connects.
+
+        data (dict[str, Any]):
+            Mutable dictionary for storing arbitrary per-client state across
+            multiple callbacks. Cleared only when the client disconnects.
+    """
+
+    def __init__(self,
+                 hub: "FifoEventQueueNetworkAsyncHub",
+                 client_id: int,
+                 reader: asyncio.StreamReader,
+                 writer: asyncio.StreamWriter):
+        self._hub = hub
+        self._reader = reader
+        self._writer = writer
+        self._closed = False
+        self.client_id = client_id
+        self.data: dict[str, Any] = {}
+
+    @property
+    def peername(self) -> tuple[str, int] | None:
+        """Return the TCP peername of the connected client, if available."""
+
+        return cast("tuple[str, int] | None", self._writer.get_extra_info("peername"))
+
+    @property
+    def is_active(self) -> bool:
+        """Whether the client connection is still active."""
+
+        return not self._closed
+
+    async def send(self, event: FifoEvent) -> SendStatus:
+        """
+        Send an event back to the originating client using the hub transport.
+
+        Args:
+            event (FifoEvent):
+                Event instance to serialize and deliver to this client.
+
+        Returns:
+            SendStatus:
+                `SendStatus.SENT` when the event is written to the stream, or
+                `SendStatus.SUPPRESSED` if a handler suppressed the event
+                before it reached the transport.
+
+        Raises:
+            ConnectionError:
+                Raised when the client connection is already closed or closing.
+        """
+
+        if self._closed:
+            raise ConnectionError("Client connection is closed")
+        return await self._hub._send_to_client(self.client_id, event)
+
+    async def broadcast(self,
+                        event: FifoEvent,
+                        *,
+                        include_self: bool = True) -> dict[int, SendStatus]:
+        """
+        Broadcast an event to every currently connected client.
+
+        Args:
+            event (FifoEvent):
+                Event instance to deliver to all active clients.
+
+            include_self (bool, optional):
+                If `True` (default), also send the event back to the
+                originating client. When `False` the caller is excluded from
+                the broadcast.
+
+        Returns:
+            dict[int, SendStatus]:
+                Mapping of client identifiers to the `SendStatus` outcome for
+                each targeted client. Returned only when every send succeeds.
+
+        Raises:
+            ConnectionError:
+                Raised when one or more client connections fail while sending.
+                The broadcast is aborted and partial results are not returned.
+        """
+
+        if self._closed and include_self:
+            raise ConnectionError("Client connection is closed")
+
+        excluded = None if include_self else {self.client_id}
+        return await self._hub._broadcast(event, excluded_client_ids=excluded)
+
+    async def stop(self) -> None:
+        """Close this client connection gracefully."""
+
+        await self._hub._close_client(self.client_id)
+
+    def _mark_closed(self) -> None:
+        """Mark the context as closed to prevent further sends."""
+
+        self._closed = True
+
+
+HubEventCallback = Callable[
+    [FifoEvent, FifoEventQueueNetworkAsyncHubClientContext],
+    Awaitable[None] | None,
+]
+
+
+class FifoEventQueueNetworkAsyncHub:
+    """
+    Asyncio-based multi-client hub that dispatches events to application callbacks.
+
+    The hub accepts any number of TCP clients (optionally protected with TLS
+    1.3), deserializes incoming `FifoEvent` objects, and delivers them to the
+    user-provided `event_callback` together with a
+    `FifoEventQueueNetworkAsyncHubClientContext`. The context enables the
+    callback to reply directly to the originating client, broadcast events to
+    all currently connected clients, and maintain arbitrary per-client state.
+
+    Outgoing events flow through the same optional handler pipeline used by the
+    single-client client/server pair, allowing interception and suppression of
+    traffic when desired.
+
+    Attributes:
+        _event_callback (HubEventCallback):
+            Callable invoked for every incoming event. May be synchronous or
+            ``async``; coroutine results are awaited before the next event from
+            the same client is read.
+
+        _handler (FifoEventQueueConnectorAsyncHandlerBase | None):
+            Optional async handler used to process incoming, outgoing, and
+            successfully sent events.
+
+        _tls_enabled (bool):
+            Indicates whether the listening socket is wrapped in TLS 1.3.
+
+        _server (asyncio.Server | None):
+            Asyncio server instance backing the listener. `None` until
+            `listen()` completes.
+
+        _clients (dict[int, _HubClientState]):
+            Active client registry keyed by the hub-assigned identifier.
+
+        _client_tasks (set[asyncio.Task[None]]):
+            Tasks currently handling client receive loops.
+
+        _client_ids (itertools.count):
+            Monotonic counter used to assign new client identifiers.
+
+        _stopping (bool):
+            Flag indicating whether ``stop()`` has been invoked.
+    """
+
+    def __init__(self,
+                 event_callback: HubEventCallback,
+                 handler: FifoEventQueueConnectorAsyncHandlerBase | None,
+                 *,
+                 tls_enabled: bool):
+        self._event_callback = event_callback
+        self._handler = handler
+        self._tls_enabled = tls_enabled
+        self._server: asyncio.Server | None = None
+        self._clients: dict[int, _HubClientState] = {}
+        self._client_tasks: set[asyncio.Task[None]] = set()
+        self._client_ids = itertools.count(1)
+        self._stopping = False
+
+    @classmethod
+    async def listen(cls,
+                     host: str,
+                     port: int,
+                     event_callback: HubEventCallback,
+                     *,
+                     handler: FifoEventQueueConnectorAsyncHandlerBase | None = None,
+                     ssl_ctx: ssl.SSLContext | None = None,
+                     ensure_ssl_ctx: bool = False) -> "FifoEventQueueNetworkAsyncHub":
+        """
+        Start listening for multiple clients and dispatch events to a callback.
+
+        Args:
+            host (str):
+                Interface address passed to `asyncio.start_server`.
+
+            port (int):
+                TCP port to bind.
+
+            event_callback (HubEventCallback):
+                Callable invoked for every incoming event. May be synchronous
+                or asynchronous.
+
+            handler (FifoEventQueueConnectorAsyncHandlerBase | None, optional):
+                Optional connector handler used to intercept incoming, outgoing,
+                and sent events.
+
+            ssl_ctx (ssl.SSLContext | None, optional):
+                SSL context enabling TLS 1.3. When `None` the hub listens in
+                cleartext.
+
+            ensure_ssl_ctx (bool, optional):
+                When `True` and `ssl_ctx` is `None`, raise `ValueError`
+                instead of allowing an unencrypted listener. Defaults to `False`.
+
+        Returns:
+            FifoEventQueueNetworkAsyncHub:
+                Hub instance bound to the requested endpoint.
+
+        Raises:
+            ValueError:
+                Raised when `ensure_ssl_ctx` is `True` but `ssl_ctx` is not
+                provided.
+        """
+
+        if ensure_ssl_ctx and ssl_ctx is None:
+            raise ValueError("SSL context is required but none was provided")
+
+        hub = cls(event_callback, handler, tls_enabled=ssl_ctx is not None)
+
+        async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            await hub._handle_client(reader, writer)
+
+        if ssl_ctx is not None:
+            logger.warning(
+                "[hub] Listening for TLS 1.3 encrypted connections on %s:%s",
+                host,
+                port,
+            )
+        else:
+            logger.warning(
+                "[hub] Listening for NOT encrypted, NOT authenticated connections on %s:%s",
+                host,
+                port,
+            )
+
+        hub._server = await asyncio.start_server(handle_client, host, port, ssl=ssl_ctx)
+        return hub
+
+    async def stop(self) -> None:
+        """Signal the hub to stop accepting clients and shut down existing ones."""
+
+        if self._stopping:
+            return
+        self._stopping = True
+
+        if self._server is not None:
+            self._server.close()
+
+        clients = list(self._clients.keys())
+        for client_id in clients:
+            await self._close_client(client_id)
+
+    async def join(self, timeout: float = 5.0) -> None:
+        """Wait for all client tasks to finish and the server socket to close."""
+
+        server = self._server
+        if server is not None:
+            await _bounded_wait_closed_server(server, timeout=timeout)
+
+        tasks = list(self._client_tasks)
+        for task in tasks:
+            if task.done():
+                continue
+            try:
+                await asyncio.wait_for(task, timeout=timeout)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "[hub] join() timed out waiting for client task; cancelling.",
+                )
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    async def _handle_client(self,
+                             reader: asyncio.StreamReader,
+                             writer: asyncio.StreamWriter) -> None:
+        if self._stopping:
+            logger.debug("[hub] Rejecting client connection while stopping.")
+            await bounded_close_and_wait_closed_writer(writer, timeout=3.0, label="hub")
+            return
+
+        client_id = next(self._client_ids)
+
+        if self._tls_enabled:
+            logger.warning(
+                "[hub] Opening TLS 1.3 encrypted connection for client %s.",
+                client_id,
+            )
+            _log_tls_peer(writer, "hub")
+        else:
+            logger.warning(
+                "[hub] Opening NOT encrypted, NOT authenticated connection for client %s.",
+                client_id,
+            )
+
+        context = FifoEventQueueNetworkAsyncHubClientContext(self, client_id, reader, writer)
+        state = _HubClientState(reader=reader, writer=writer, context=context)
+        self._clients[client_id] = state
+        task = asyncio.create_task(self._client_loop(client_id, state))
+        state.task = task
+        self._client_tasks.add(task)
+        task.add_done_callback(
+            lambda fut, cid=client_id, st=state: asyncio.create_task(
+                self._on_client_done(cid, st, fut)
+            )
+        )
+
+    async def _client_loop(self,
+                           client_id: int,
+                           state: _HubClientState) -> None:
+        reader = state.reader
+        context = state.context
+
+        try:
+            while True:
+                event = await FifoEvent.deserialize_from_stream_async(reader)
+                event_to_dispatch = event
+
+                if self._handler is not None:
+                    try:
+                        candidate = await self._handler.process_incoming_event(event)
+                    except Exception:  # pylint: disable=broad-exception-caught
+                        logger.error(
+                            "[hub] process_incoming_event handler failed. Discarding event.",
+                        )
+                        candidate = None
+
+                    if not isinstance(event, FifoEventShutdown):
+                        if candidate is None:
+                            continue
+                        event_to_dispatch = candidate
+
+                await self._invoke_callback(event_to_dispatch, context)
+
+                if isinstance(event, FifoEventShutdown):
+                    break
+
+        except asyncio.CancelledError:
+            raise
+        except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError) as exc:
+            logger.debug(
+                "[hub] Client %s disconnected: %r",
+                client_id,
+                exc,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error(
+                "[hub] Unexpected error while handling client %s: %r",
+                client_id,
+                exc,
+            )
+
+    async def _invoke_callback(self,
+                               event: FifoEvent,
+                               context: FifoEventQueueNetworkAsyncHubClientContext) -> None:
+        try:
+            result = self._event_callback(event, context)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("[hub] Event callback raised: %r", exc)
+            return
+
+        if asyncio.iscoroutine(result):
+            try:
+                await result
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error("[hub] Event callback coroutine raised: %r", exc)
+
+    async def _send_to_client(self, client_id: int, event: FifoEvent) -> SendStatus:
+        state = self._clients.get(client_id)
+        if state is None:
+            raise ConnectionError("Client is not connected")
+
+        async with state.send_lock:
+            if state.writer.is_closing():
+                raise ConnectionError("Client connection is closing")
+
+            event_to_send = event
+            if self._handler is not None:
+                try:
+                    candidate = await self._handler.process_outgoing_event(event)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    logger.error(
+                        "[hub] process_outgoing_event handler failed. Discarding event.",
+                    )
+                    candidate = None
+
+                if not isinstance(event, FifoEventShutdown):
+                    if candidate is None:
+                        return SendStatus.SUPPRESSED
+                    event_to_send = candidate
+
+            try:
+                await event_to_send.serialize_to_stream_async(state.writer)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error(
+                    "[hub] Failed to send event to client %s: %r",
+                    client_id,
+                    exc,
+                )
+                raise ConnectionError("Failed to send event") from exc
+
+            if self._handler is not None:
+                try:
+                    await self._handler.process_sent_event(event_to_send)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    logger.error("[hub] process_sent_event handler failed.")
+
+            return SendStatus.SENT
+
+    async def _broadcast(self,
+                         event: FifoEvent,
+                         *,
+                         excluded_client_ids: set[int] | None = None) -> dict[int, SendStatus]:
+        targets = [
+            client_id
+            for client_id in list(self._clients.keys())
+            if excluded_client_ids is None or client_id not in excluded_client_ids
+        ]
+
+        results: dict[int, SendStatus] = {}
+        failures: dict[int, ConnectionError] = {}
+
+        for client_id in targets:
+            try:
+                results[client_id] = await self._send_to_client(client_id, event)
+            except ConnectionError as exc:
+                logger.debug(
+                    "[hub] Broadcast send failed for client %s: %r",
+                    client_id,
+                    exc,
+                )
+                failures[client_id] = exc
+
+        if failures:
+            summary = ", ".join(f"{cid}: {err}" for cid, err in failures.items())
+            first_error = next(iter(failures.values()))
+            raise ConnectionError(
+                f"Failed to broadcast event to clients: {summary}"
+            ) from first_error
+
+        return results
+
+    async def _close_client(self,
+                            client_id: int,
+                            *,
+                            send_shutdown: bool = True,
+                            timeout: float = 3.0) -> None:
+        state = self._clients.get(client_id)
+        if state is None:
+            return
+
+        if send_shutdown:
+            try:
+                await self._send_to_client(client_id, FifoEventShutdown())
+            except ConnectionError:
+                pass
+
+        task = state.task
+        if task is not None and not task.done():
+            try:
+                await asyncio.wait_for(task, timeout=timeout)
+            except asyncio.TimeoutError:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    async def _on_client_done(self,
+                              client_id: int,
+                              state: _HubClientState,
+                              fut: asyncio.Future[None]) -> None:
+        if self._clients.get(client_id) is not state:
+            return
+
+        self._clients.pop(client_id, None)
+
+        self._client_tasks.discard(state.task)
+        state.context._mark_closed()
+
+        await bounded_close_and_wait_closed_writer(state.writer, timeout=3.0, label="hub")
+
+        if not fut.cancelled():
+            exc = fut.exception()
+            if exc is not None:
+                logger.error(
+                    "[hub] Client task for %s exited with error: %r",
+                    client_id,
+                    exc,
+                )

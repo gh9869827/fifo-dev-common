@@ -815,6 +815,10 @@ HubEventCallback = Callable[
     [FifoEvent, FifoEventQueueNetworkAsyncHubClientContext],
     Awaitable[None] | None,
 ]
+HubClientLifecycleCallback = Callable[
+    [FifoEventQueueNetworkAsyncHubClientContext],
+    Awaitable[None] | None,
+]
 
 
 class FifoEventQueueNetworkAsyncHub:
@@ -824,8 +828,9 @@ class FifoEventQueueNetworkAsyncHub:
     The hub accepts any number of TCP clients (optionally protected with TLS
     1.3), deserializes incoming `FifoEvent` objects, and delivers them to the
     user-provided `event_callback` together with a
-    `FifoEventQueueNetworkAsyncHubClientContext`. The context enables the
-    callback to reply directly to the originating client, broadcast events to
+    `FifoEventQueueNetworkAsyncHubClientContext`. Optional lifecycle callbacks
+    can observe client connections and disconnections. The context enables the
+    callbacks to reply directly to the originating client, broadcast events to
     all currently connected clients, and maintain arbitrary per-client state.
 
     Outgoing events flow through the same optional handler pipeline used by the
@@ -841,6 +846,14 @@ class FifoEventQueueNetworkAsyncHub:
         _handler (FifoEventQueueConnectorAsyncHandlerBase | None):
             Optional async handler used to process incoming, outgoing, and
             successfully sent events.
+
+        _client_connected_callback (HubClientLifecycleCallback | None):
+            Optional callable invoked after a client is added to the active
+            registry.
+
+        _client_disconnected_callback (HubClientLifecycleCallback | None):
+            Optional callable invoked after a client has been fully removed
+            from the registry and its context marked inactive.
 
         _tls_enabled (bool):
             Indicates whether the listening socket is wrapped in TLS 1.3.
@@ -866,7 +879,9 @@ class FifoEventQueueNetworkAsyncHub:
                  event_callback: HubEventCallback,
                  handler: FifoEventQueueConnectorAsyncHandlerBase | None,
                  *,
-                 tls_enabled: bool):
+                 tls_enabled: bool,
+                 client_connected_callback: HubClientLifecycleCallback | None,
+                 client_disconnected_callback: HubClientLifecycleCallback | None):
         """
         Initialize a hub instance for multi-client event dispatch.
 
@@ -885,10 +900,24 @@ class FifoEventQueueNetworkAsyncHub:
             tls_enabled (bool):
                 Indicates whether TLS 1.3 encryption is enabled for the listening
                 socket and client connections.
+
+            client_connected_callback (HubClientLifecycleCallback | None):
+                Optional callable invoked after a client connection has been fully
+                registered with the hub. Receives the client's
+                `FifoEventQueueNetworkAsyncHubClientContext` and may be synchronous
+                or asynchronous.
+
+            client_disconnected_callback (HubClientLifecycleCallback | None):
+                Optional callable invoked after a client connection has been torn
+                down and marked inactive. Receives the client's
+                `FifoEventQueueNetworkAsyncHubClientContext` and may be synchronous
+                or asynchronous.
         """
         self._event_callback = event_callback
         self._handler = handler
         self._tls_enabled = tls_enabled
+        self._client_connected_callback = client_connected_callback
+        self._client_disconnected_callback = client_disconnected_callback
         self._server: asyncio.Server | None = None
         self._clients: dict[int, _HubClientState] = {}
         self._client_tasks: set[asyncio.Task[None]] = set()
@@ -901,6 +930,8 @@ class FifoEventQueueNetworkAsyncHub:
                      port: int,
                      event_callback: HubEventCallback,
                      *,
+                     client_connected_callback: HubClientLifecycleCallback | None = None,
+                     client_disconnected_callback: HubClientLifecycleCallback | None = None,
                      handler: FifoEventQueueConnectorAsyncHandlerBase | None = None,
                      ssl_ctx: ssl.SSLContext | None = None,
                      ensure_ssl_ctx: bool = False) -> FifoEventQueueNetworkAsyncHub:
@@ -917,6 +948,16 @@ class FifoEventQueueNetworkAsyncHub:
             event_callback (HubEventCallback):
                 Callable invoked for every incoming event. May be synchronous
                 or asynchronous.
+
+            client_connected_callback (HubClientLifecycleCallback | None, optional):
+                Callable invoked once for each new client that successfully connects
+                to the hub. Receives the client's
+                `FifoEventQueueNetworkAsyncHubClientContext`.
+
+            client_disconnected_callback (HubClientLifecycleCallback | None, optional):
+                Callable invoked once for each client when the connection is closed
+                and cleanup has completed. Receives the client's
+                `FifoEventQueueNetworkAsyncHubClientContext`.
 
             handler (FifoEventQueueConnectorAsyncHandlerBase | None, optional):
                 Optional connector handler used to intercept incoming, outgoing,
@@ -943,7 +984,11 @@ class FifoEventQueueNetworkAsyncHub:
         if ensure_ssl_ctx and ssl_ctx is None:
             raise ValueError("SSL context is required but none was provided")
 
-        hub = cls(event_callback, handler, tls_enabled=ssl_ctx is not None)
+        hub = cls(event_callback,
+                  handler,
+                  tls_enabled=ssl_ctx is not None,
+                  client_connected_callback=client_connected_callback,
+                  client_disconnected_callback=client_disconnected_callback)
 
         async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             # Friend-class pattern: context delegates to hub's internal method
@@ -1029,6 +1074,7 @@ class FifoEventQueueNetworkAsyncHub:
         context = FifoEventQueueNetworkAsyncHubClientContext(self, client_id, reader, writer)
         state = _HubClientState(reader=reader, writer=writer, context=context)
         self._clients[client_id] = state
+        await self._invoke_client_connected_callback(context)
         task = asyncio.create_task(self._client_loop(client_id, state))
         state.task = task
         self._client_tasks.add(task)
@@ -1207,7 +1253,10 @@ class FifoEventQueueNetworkAsyncHub:
 
         # Notify the client by sending a FifoEventShutdown so the client's receive loop can
         # exit gracefully.
-        await self._send_to_client(client_id, FifoEventShutdown())
+        try:
+            await self._send_to_client(client_id, FifoEventShutdown())
+        except ConnectionError:
+            pass
 
         self._clients.pop(client_id, None)
 
@@ -1218,6 +1267,7 @@ class FifoEventQueueNetworkAsyncHub:
         state.context._mark_closed() # pyright: ignore[reportPrivateUsage] # pylint: disable=protected-access
 
         await bounded_close_and_wait_closed_writer(state.writer, timeout=3.0, label="hub")
+        await self._invoke_client_disconnected_callback(state.context)
 
         if not fut.cancelled():
             exc = fut.exception()
@@ -1227,3 +1277,45 @@ class FifoEventQueueNetworkAsyncHub:
                     client_id,
                     exc,
                 )
+
+    async def _invoke_client_connected_callback(self,
+                                                context: FifoEventQueueNetworkAsyncHubClientContext) -> None:
+        await self._invoke_lifecycle_callback(
+            self._client_connected_callback,
+            context,
+            phase="connected",
+        )
+
+    async def _invoke_client_disconnected_callback(self,
+                                                   context: FifoEventQueueNetworkAsyncHubClientContext) -> None:
+        await self._invoke_lifecycle_callback(
+            self._client_disconnected_callback,
+            context,
+            phase="disconnected",
+        )
+
+    async def _invoke_lifecycle_callback(self,
+                                         callback: HubClientLifecycleCallback | None,
+                                         context: FifoEventQueueNetworkAsyncHubClientContext,
+                                         *,
+                                         phase: str) -> None:
+        if callback is None:
+            return
+
+        try:
+            result = callback(context)
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.error("[hub] Client %s callback raised during %s: %r",
+                         context.client_id,
+                         phase,
+                         exc)
+            return
+
+        if asyncio.iscoroutine(result):
+            try:
+                await result
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.error("[hub] Client %s callback coroutine raised during %s: %r",
+                             context.client_id,
+                             phase,
+                             exc)

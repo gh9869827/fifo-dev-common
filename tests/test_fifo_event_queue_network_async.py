@@ -205,8 +205,9 @@ async def test_hub_handles_multiple_clients(unused_tcp_port: int):
     events: asyncio.Queue[tuple[int, int, int]] = asyncio.Queue()
     broadcasts: asyncio.Queue[dict[int, SendStatus]] = asyncio.Queue()
 
-    async def on_event(event: DummyEvent,
+    async def on_event(event: FifoEvent,
                        context: FifoEventQueueNetworkAsyncHubClientContext) -> None:
+        assert isinstance(event, DummyEvent)
         assert context.is_active
         count = context.data.get("count", 0) + 1
         context.data["count"] = count

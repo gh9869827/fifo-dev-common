@@ -10,6 +10,7 @@ Asyncio-based TCP transport for `FifoEvent` objects, with optional TLS 1.3 encry
 > - Do **not** expose this service to the public internet or untrusted networks.
 """
 
+from __future__ import annotations
 import asyncio
 import contextlib
 import ssl
@@ -634,11 +635,37 @@ class FifoEventQueueNetworkAsyncServer(
 
 @dataclass(slots=True)
 class _HubClientState:
-    """Internal bookkeeping for hub client connections."""
+    """
+    Internal bookkeeping for hub client connections.
+
+    This dataclass maintains the state for each connected client, including the
+    asyncio stream objects, client context, serialization lock, and background task.
+    It is managed internally by FifoEventQueueNetworkAsyncHub and should not be
+    instantiated directly by application code.
+
+    Attributes:
+        reader (asyncio.StreamReader):
+            Stream reader for receiving data from this client.
+
+        writer (asyncio.StreamWriter):
+            Stream writer for sending data to this client.
+
+        context (FifoEventQueueNetworkAsyncHubClientContext):
+            Client context exposed to application callbacks, providing helper methods
+            for replying, broadcasting, and maintaining per-client state.
+
+        send_lock (asyncio.Lock):
+            Lock ensuring that only one send operation occurs at a time per client,
+            preventing interleaved writes to the stream.
+
+        task (asyncio.Task[None] | None):
+            Background task running the client receive loop. Set after initialization
+            by the hub when the task is created.
+    """
 
     reader: asyncio.StreamReader
     writer: asyncio.StreamWriter
-    context: "FifoEventQueueNetworkAsyncHubClientContext"
+    context: FifoEventQueueNetworkAsyncHubClientContext
     send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     task: asyncio.Task[None] | None = field(init=False, default=None)
 
@@ -662,10 +689,32 @@ class FifoEventQueueNetworkAsyncHubClientContext:
     """
 
     def __init__(self,
-                 hub: "FifoEventQueueNetworkAsyncHub",
+                 hub: FifoEventQueueNetworkAsyncHub,
                  client_id: int,
                  reader: asyncio.StreamReader,
                  writer: asyncio.StreamWriter):
+        """
+        Initialize a client context for use in hub event callbacks.
+
+        This constructor is called internally by FifoEventQueueNetworkAsyncHub when
+        a new client connects. Application code should not instantiate this class directly.
+
+        Args:
+            hub (FifoEventQueueNetworkAsyncHub):
+                The hub instance managing this client connection. Used to delegate
+                send, broadcast, and close operations.
+
+            client_id (int):
+                Unique monotonic identifier assigned by the hub for this client.
+
+            reader (asyncio.StreamReader):
+                Stream reader for this client's connection (retained for potential
+                future use; currently unused in the context API).
+
+            writer (asyncio.StreamWriter):
+                Stream writer for this client's connection, used to extract connection
+                metadata like peername.
+        """
         self._hub = hub
         self._reader = reader
         self._writer = writer
@@ -675,13 +724,17 @@ class FifoEventQueueNetworkAsyncHubClientContext:
 
     @property
     def peername(self) -> tuple[str, int] | None:
-        """Return the TCP peername of the connected client, if available."""
+        """
+        Return the TCP peername of the connected client, if available.
+        """
 
-        return cast("tuple[str, int] | None", self._writer.get_extra_info("peername"))
+        return cast(tuple[str, int] | None, self._writer.get_extra_info("peername"))
 
     @property
     def is_active(self) -> bool:
-        """Whether the client connection is still active."""
+        """
+        Whether the client connection is still active.
+        """
 
         return not self._closed
 
@@ -706,7 +759,8 @@ class FifoEventQueueNetworkAsyncHubClientContext:
 
         if self._closed:
             raise ConnectionError("Client connection is closed")
-        return await self._hub._send_to_client(self.client_id, event)
+        # Friend-class pattern: context delegates to hub's internal method
+        return await self._hub._send_to_client(self.client_id, event) # pyright: ignore[reportPrivateUsage] # pylint: disable=protected-access
 
     async def broadcast(self,
                         event: FifoEvent,
@@ -739,15 +793,20 @@ class FifoEventQueueNetworkAsyncHubClientContext:
             raise ConnectionError("Client connection is closed")
 
         excluded = None if include_self else {self.client_id}
-        return await self._hub._broadcast(event, excluded_client_ids=excluded)
+        # Friend-class pattern: context delegates to hub's internal method
+        return await self._hub._broadcast(event, excluded_client_ids=excluded) # pyright: ignore[reportPrivateUsage] # pylint: disable=protected-access
 
     async def stop(self) -> None:
-        """Close this client connection gracefully."""
-
-        await self._hub._close_client(self.client_id)
+        """
+        Close this client connection gracefully.
+        """
+        # Friend-class pattern: context delegates to hub's internal method
+        await self._hub._close_client(self.client_id) # pyright: ignore[reportPrivateUsage] # pylint: disable=protected-access
 
     def _mark_closed(self) -> None:
-        """Mark the context as closed to prevent further sends."""
+        """
+        Mark the context as closed to prevent further sends.
+        """
 
         self._closed = True
 
@@ -776,7 +835,7 @@ class FifoEventQueueNetworkAsyncHub:
     Attributes:
         _event_callback (HubEventCallback):
             Callable invoked for every incoming event. May be synchronous or
-            ``async``; coroutine results are awaited before the next event from
+            `async`; coroutine results are awaited before the next event from
             the same client is read.
 
         _handler (FifoEventQueueConnectorAsyncHandlerBase | None):
@@ -800,7 +859,7 @@ class FifoEventQueueNetworkAsyncHub:
             Monotonic counter used to assign new client identifiers.
 
         _stopping (bool):
-            Flag indicating whether ``stop()`` has been invoked.
+            Flag indicating whether `stop()` has been invoked.
     """
 
     def __init__(self,
@@ -808,6 +867,25 @@ class FifoEventQueueNetworkAsyncHub:
                  handler: FifoEventQueueConnectorAsyncHandlerBase | None,
                  *,
                  tls_enabled: bool):
+        """
+        Initialize a hub instance for multi-client event dispatch.
+
+        This constructor is called internally by the `listen()` factory method.
+        Application code should use `listen()` instead of directly instantiating this class.
+
+        Args:
+            event_callback (HubEventCallback):
+                Callable invoked for every incoming event from any client. May be
+                synchronous or asynchronous.
+
+            handler (FifoEventQueueConnectorAsyncHandlerBase | None):
+                Optional connector handler used to intercept and process incoming,
+                outgoing, and successfully sent events.
+
+            tls_enabled (bool):
+                Indicates whether TLS 1.3 encryption is enabled for the listening
+                socket and client connections.
+        """
         self._event_callback = event_callback
         self._handler = handler
         self._tls_enabled = tls_enabled
@@ -825,7 +903,7 @@ class FifoEventQueueNetworkAsyncHub:
                      *,
                      handler: FifoEventQueueConnectorAsyncHandlerBase | None = None,
                      ssl_ctx: ssl.SSLContext | None = None,
-                     ensure_ssl_ctx: bool = False) -> "FifoEventQueueNetworkAsyncHub":
+                     ensure_ssl_ctx: bool = False) -> FifoEventQueueNetworkAsyncHub:
         """
         Start listening for multiple clients and dispatch events to a callback.
 
@@ -868,7 +946,8 @@ class FifoEventQueueNetworkAsyncHub:
         hub = cls(event_callback, handler, tls_enabled=ssl_ctx is not None)
 
         async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-            await hub._handle_client(reader, writer)
+            # Friend-class pattern: context delegates to hub's internal method
+            await hub._handle_client(reader, writer) # pyright: ignore[reportPrivateUsage] # pylint: disable=protected-access
 
         if ssl_ctx is not None:
             logger.warning(
@@ -887,7 +966,9 @@ class FifoEventQueueNetworkAsyncHub:
         return hub
 
     async def stop(self) -> None:
-        """Signal the hub to stop accepting clients and shut down existing ones."""
+        """
+        Signal the hub to stop accepting clients and shut down existing ones.
+        """
 
         if self._stopping:
             return
@@ -901,7 +982,9 @@ class FifoEventQueueNetworkAsyncHub:
             await self._close_client(client_id)
 
     async def join(self, timeout: float = 5.0) -> None:
-        """Wait for all client tasks to finish and the server socket to close."""
+        """
+        Wait for all client tasks to finish and the server socket to close.
+        """
 
         server = self._server
         if server is not None:
@@ -949,11 +1032,11 @@ class FifoEventQueueNetworkAsyncHub:
         task = asyncio.create_task(self._client_loop(client_id, state))
         state.task = task
         self._client_tasks.add(task)
-        task.add_done_callback(
-            lambda fut, cid=client_id, st=state: asyncio.create_task(
-                self._on_client_done(cid, st, fut)
-            )
-        )
+
+        def _done_callback(fut: asyncio.Task[None]) -> None:
+            asyncio.create_task(self._on_client_done(client_id, state, fut))
+
+        task.add_done_callback(_done_callback)
 
     async def _client_loop(self,
                            client_id: int,
@@ -985,7 +1068,8 @@ class FifoEventQueueNetworkAsyncHub:
                 if isinstance(event, FifoEventShutdown):
                     break
 
-        except asyncio.CancelledError:
+        except asyncio.CancelledError:  # pylint: disable=W0706
+            # Intentionally propagate cancellation; preserve original traceback.
             raise
         except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError) as exc:
             logger.debug(
@@ -1123,8 +1207,11 @@ class FifoEventQueueNetworkAsyncHub:
 
         self._clients.pop(client_id, None)
 
-        self._client_tasks.discard(state.task)
-        state.context._mark_closed()
+        if state.task is not None:
+            self._client_tasks.discard(state.task)
+
+        # Friend-class pattern: hub accesses context's internal method for cleanup
+        state.context._mark_closed() # pyright: ignore[reportPrivateUsage] # pylint: disable=protected-access
 
         await bounded_close_and_wait_closed_writer(state.writer, timeout=3.0, label="hub")
 

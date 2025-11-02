@@ -1205,6 +1205,10 @@ class FifoEventQueueNetworkAsyncHub:
         if self._clients.get(client_id) is not state:
             return
 
+        # Notify the client by sending a FifoEventShutdown so the client's receive loop can
+        # exit gracefully.
+        await self._send_to_client(client_id, FifoEventShutdown())
+
         self._clients.pop(client_id, None)
 
         if state.task is not None:

@@ -264,6 +264,58 @@ async def test_hub_handles_multiple_clients(unused_tcp_port: int):
 
 
 @pytest.mark.asyncio
+async def test_hub_client_lifecycle_callbacks(unused_tcp_port: int):
+    host = "127.0.0.1"
+    port = unused_tcp_port
+
+    connect_events: asyncio.Queue[tuple[int, bool]] = asyncio.Queue()
+    disconnect_events: asyncio.Queue[tuple[int, bool]] = asyncio.Queue()
+
+    async def on_event(event: FifoEvent,
+                       context: FifoEventQueueNetworkAsyncHubClientContext) -> None:
+        assert isinstance(event, DummyEvent)
+        await context.send(DummyEvent(value=event.value + 1))
+
+    async def on_connect(context: FifoEventQueueNetworkAsyncHubClientContext) -> None:
+        await connect_events.put((context.client_id, context.is_active))
+
+    async def on_disconnect(context: FifoEventQueueNetworkAsyncHubClientContext) -> None:
+        await disconnect_events.put((context.client_id, context.is_active))
+
+    hub = await FifoEventQueueNetworkAsyncHub.listen(
+        host,
+        port,
+        on_event,
+        client_connected_callback=on_connect,
+        client_disconnected_callback=on_disconnect,
+    )
+
+    client = await FifoEventQueueNetworkAsyncClient.connect(host, port)
+
+    connected_client_id, connected_active = await asyncio.wait_for(connect_events.get(), timeout=1.0)
+    assert connected_client_id == 1
+    assert connected_active is True
+
+    await client.put(DummyEvent(value=5))
+    reply = await asyncio.wait_for(client._out_queue.get(), timeout=1.0)
+    assert isinstance(reply, DummyEvent)
+    assert reply.value == 6
+
+    await hub.stop()
+
+    shutdown = await asyncio.wait_for(client._out_queue.get(), timeout=1.0)
+    assert isinstance(shutdown, FifoEventShutdown)
+
+    disconnected_client_id, disconnected_active = await asyncio.wait_for(disconnect_events.get(), timeout=1.0)
+    assert disconnected_client_id == connected_client_id
+    assert disconnected_active is False
+
+    await client.stop()
+
+    await asyncio.gather(client.join(), hub.join())
+
+
+@pytest.mark.asyncio
 async def test_serial_client_uses_connector_base(unused_tcp_port: int):
     host = "127.0.0.1"
     port = unused_tcp_port

@@ -685,7 +685,9 @@ class FifoEventQueueNetworkAsyncHubClientContext:
 
         data (dict[str, Any]):
             Mutable dictionary for storing arbitrary per-client state across
-            multiple callbacks. Cleared only when the client disconnects.
+            multiple callbacks. Cleared after the client disconnection callback
+            completes, allowing the callback to access any stored state one final
+            time before cleanup.
     """
 
     def __init__(self,
@@ -1268,6 +1270,8 @@ class FifoEventQueueNetworkAsyncHub:
 
         await bounded_close_and_wait_closed_writer(state.writer, timeout=3.0, label="hub")
         await self._invoke_client_disconnected_callback(state.context)
+
+        state.context.data.clear()  # Clear per-client state on disconnect
 
         if not fut.cancelled():
             exc = fut.exception()

@@ -520,6 +520,12 @@ class TestNumpy1D(FifoSerializable):
 
 @serializable
 @dataclass
+class TestNumpyBool(FifoSerializable):
+    arr: NDArray[np.bool_] = field(metadata={"format": "[np:bool]"})
+
+
+@serializable
+@dataclass
 class TestNumpy2D(FifoSerializable):
     arr: NDArray[np.float32] = field(metadata={"format": "[np:f32]"})
 
@@ -548,19 +554,28 @@ class TestNumpyFixedMatrix(FifoSerializable):
     arr: NDArray[np.int8] = field(metadata={"format": "[np:i8:3,3]"})
 
 
+@serializable
+@dataclass
+class TestNumpyFixedBool(FifoSerializable):
+    arr: NDArray[np.bool_] = field(metadata={"format": "[np:bool:2,2]"})
+
+
 def test_numpy_arrays_roundtrip() -> None:
     a1 = np.arange(10, dtype=np.uint8)
     a2 = np.arange(6, dtype=np.float32).reshape(2, 3)
     a3 = np.arange(24, dtype=np.int16).reshape(2, 3, 4)
+    a4 = np.array([True, False, True, True, False, False, True, False, True], dtype=np.bool_).reshape(3, 3)
 
     o1 = TestNumpy1D(a1)
     o2 = TestNumpy2D(a2)
     o3 = TestNumpy3D(a3)
+    o4 = TestNumpyBool(a4)
 
     lst: list[tuple[FifoSerializable, NDArray[Any], Type[FifoSerializable]]] = [
         (o1, a1, TestNumpy1D),
         (o2, a2, TestNumpy2D),
         (o3, a3, TestNumpy3D),
+        (o4, a4, TestNumpyBool),
     ]
 
     for obj, arr, cls in lst:
@@ -576,15 +591,18 @@ def test_numpy_fixed_arrays_roundtrip() -> None:
     v1 = np.arange(64, dtype=np.int32)
     v2 = np.arange(6, dtype=np.float32).reshape(2, 3)
     v3 = np.arange(9, dtype=np.int8).reshape(3, 3)
+    v4 = np.array([[True, False], [False, True]], dtype=np.bool_)
 
     o1 = TestNumpyFixed1D(v1)
     o2 = TestNumpyFixed2D(v2)
     o3 = TestNumpyFixedMatrix(v3)
+    o4 = TestNumpyFixedBool(v4)
 
     lst: list[tuple[FifoSerializable, NDArray[Any], Type[FifoSerializable]]] = [
         (o1, v1, TestNumpyFixed1D),
         (o2, v2, TestNumpyFixed2D),
         (o3, v3, TestNumpyFixedMatrix),
+        (o4, v4, TestNumpyFixedBool),
     ]
 
     for obj, arr, cls in lst:

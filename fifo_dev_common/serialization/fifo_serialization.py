@@ -14,6 +14,7 @@ _NUMPY_DTYPES: dict[str, np.dtype[Any]] = {
     "u8": np.dtype(np.uint8),
     "u16": np.dtype(np.uint16),
     "u32": np.dtype(np.uint32),
+    "bool": np.dtype(np.bool_),
     "i8": np.dtype(np.int8),
     "i16": np.dtype(np.int16),
     "i32": np.dtype(np.int32),
@@ -150,13 +151,14 @@ def compile_field(field: Field[Any]) -> FieldSpecCompiled:
             Example: '[f]' means a variable-length array of floats.
 
       - NumPy arrays of fixed dtype:
-          - '[np:x]' where x is one of 'u8', 'u16', 'u32', 'i8', 'i16', 'i32',
-            'f32', 'f64'. The dtype must be fixed for the field.
-            Supports arrays of arbitrary dimension.
-          - '[np:x:shape]' where 'shape' is a comma-separated list of
-            integers specifying the fixed array shape (e.g.,
-            '[np:i32:64]' for a vector of length 64, '[np:f32:2,3]' for a
-            2x3 array). The array's shape is omitted from the serialized
+          - '[np:x]' where x is one of 'u8', 'u16', 'u32', 'bool', 'i8', 'i16',
+            'i32', 'f32', 'f64'. The dtype must be fixed for the field.
+            Supports arrays of arbitrary dimension. Booleans are packed as bits
+            into bytes to minimize space.
+      - '[np:x:shape]' where 'shape' is a comma-separated list of
+        integers specifying the fixed array shape (e.g.,
+        '[np:i32:64]' for a vector of length 64, '[np:f32:2,3]' for a
+        2x3 array). The array's shape is omitted from the serialized
             data, reducing overhead when the shape is known.
 
       - Optional values (nullable) of basic types:
@@ -1354,6 +1356,7 @@ class FieldSpecCompiledFixedNumpyArray(FieldSpecCompiled):
     dtype: np.dtype[Any]
     shape: tuple[int, ...]
     _byte_len: int
+    _element_count: int
 
     def __init__(self, name: str, dtype: np.dtype[Any], shape: tuple[int, ...]):
         """
@@ -1375,7 +1378,8 @@ class FieldSpecCompiledFixedNumpyArray(FieldSpecCompiled):
         count = 1
         for dim in self.shape:
             count *= dim
-        self._byte_len = count * self.dtype.itemsize
+        self._element_count = count
+        self._byte_len = (count + 7) // 8 if self.dtype == np.bool_ else count * self.dtype.itemsize
 
     def serialize_to_bytes(self, class_obj: Any, buffer: bytearray, idx: int) -> int:
         """
@@ -1404,7 +1408,10 @@ class FieldSpecCompiledFixedNumpyArray(FieldSpecCompiled):
             raise ValueError("NDArray dtype mismatch")
         if arr.shape != self.shape:
             raise ValueError("NDArray shape mismatch")
-        data = arr.tobytes(order="C")
+        if self.dtype == np.bool_:
+            data = np.packbits(arr.reshape(-1, order="C"), bitorder="little").tobytes()
+        else:
+            data = arr.tobytes(order="C")
         buffer[idx:idx + self._byte_len] = data
         return idx + self._byte_len
 
@@ -1424,9 +1431,14 @@ class FieldSpecCompiledFixedNumpyArray(FieldSpecCompiled):
                 - The deserialized NumPy array.
                 - The updated buffer index after reading.
         """
-        count = self._byte_len // self.dtype.itemsize
-        arr = np.frombuffer(buffer, dtype=self.dtype, count=count, offset=idx).reshape(self.shape)
-        arr = arr.copy()  # Defensive copy (frombuffer is always read-only)
+        count = self._element_count
+        if self.dtype == np.bool_:
+            packed = np.frombuffer(buffer, dtype=np.uint8, count=self._byte_len, offset=idx)
+            unpacked = np.unpackbits(packed, count=count, bitorder="little")
+            arr = unpacked.astype(np.bool_, copy=False).reshape(self.shape)
+        else:
+            arr = np.frombuffer(buffer, dtype=self.dtype, count=count, offset=idx).reshape(self.shape)
+            arr = arr.copy()  # Defensive copy (frombuffer is always read-only)
         idx += self._byte_len
         return arr, idx
 
@@ -1516,7 +1528,10 @@ class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
         idx += 1
         struct.pack_into("<" + "I" * ndim, buffer, idx, *arr.shape)
         idx += 4 * ndim
-        data = arr.tobytes(order="C")
+        if self.dtype == np.bool_:
+            data = np.packbits(arr.reshape(-1, order="C"), bitorder="little").tobytes()
+        else:
+            data = arr.tobytes(order="C")
         buffer[idx:idx + len(data)] = data
         return idx + len(data)
 
@@ -1543,9 +1558,15 @@ class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
         count = 1
         for dim in shape:
             count *= dim
-        byte_len = count * self.dtype.itemsize
-        arr = np.frombuffer(buffer, dtype=self.dtype, count=count, offset=idx).reshape(shape)
-        arr = arr.copy()  # Defensive copy (frombuffer is always read-only)
+        if self.dtype == np.bool_:
+            byte_len = (count + 7) // 8
+            packed = np.frombuffer(buffer, dtype=np.uint8, count=byte_len, offset=idx)
+            unpacked = np.unpackbits(packed, count=count, bitorder="little")
+            arr = unpacked.astype(np.bool_, copy=False).reshape(shape)
+        else:
+            byte_len = count * self.dtype.itemsize
+            arr = np.frombuffer(buffer, dtype=self.dtype, count=count, offset=idx).reshape(shape)
+            arr = arr.copy()  # Defensive copy (frombuffer is always read-only)
         idx += byte_len
         return arr, idx
 
@@ -1562,6 +1583,8 @@ class FieldSpecCompiledNumpyArray(FieldSpecCompiled):
                 The total byte size for serialization.
         """
         arr: NDArray[Any] = getattr(class_obj, self.name)
+        if self.dtype == np.bool_:
+            return 1 + 4 * arr.ndim + (arr.size + 7) // 8
         return 1 + 4 * arr.ndim + arr.nbytes
 
 
